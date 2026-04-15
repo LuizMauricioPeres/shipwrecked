@@ -298,16 +298,27 @@ impl Parser {
             Some(Token::Do) => self.parse_do_while(sp),
             Some(Token::For) => self.parse_for(sp),
             Some(Token::Return) => self.parse_return(),
-            // `?` — QOUT shorthand
-            Some(Token::Gt) => {
-                // Harbour `?` is tokenized as two `>`? No — it's a single `?`.
-                // In our lexer we have no `?` token, so `?` is handled via Ident("?")
-                // after normalization. Actually `?` should be a dedicated token.
-                // For now treat it as a print if we see `Ident("?")`
-                self.advance();
-                let expr = self.parse_expr()?;
+            // Agora o Parser reconhece o VIP que o Lexer enviou
+            Some(Token::Question) => {
+                self.advance(); // Consome o '?'
+                // No Harbour, o '?' pode não ter nada na frente (pula linha)
+                // ou ter uma expressão.
+                let expr = if matches!(self.peek(), Some(Token::Newline) | Some(Token::Semicolon) | None) {
+                    // Se for fim de linha, o comando '?' imprime vazio (nil)
+                    Expr::nil(sp..self.pos)
+                } else {
+                    self.parse_expr()?
+                };
                 Ok(Stmt::new(StmtKind::Print(expr), sp..self.pos))
             }
+
+            Some(Token::QuestionQuestion) => {
+                self.advance(); // Consome o '??'
+                let expr = self.parse_expr()?;
+                // Aqui você passaria para um StmtKind::PrintInline ou similar
+                Ok(Stmt::new(StmtKind::Print(expr), sp..self.pos))
+            }
+
             Some(Token::Ident(_)) => self.parse_ident_stmt(sp),
             Some(other) => Err(ParseError::Unexpected {
                 got: format!("{other:?}"),
@@ -681,8 +692,8 @@ impl Parser {
     }
 
     fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.parse_primary()?;
         let sp = self.pos;
+        let mut expr = self.parse_primary()?;
         loop {
             match self.peek().cloned() {
                 // array index: expr[idx]  — context: preceded by expr → always index
