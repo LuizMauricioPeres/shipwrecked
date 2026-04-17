@@ -201,6 +201,107 @@ impl HbValue {
         }
     }
 
+    /// Comprimento interno (para bounds checks em código gerado).
+    pub fn len(&self) -> usize {
+        match self {
+            HbValue::String(s) => s.len(),
+            HbValue::Array(a)  => a.len(),
+            _ => 0,
+        }
+    }
+
+    /// Coerção para string — espelho de `cValToChar()` do Harbour.
+    pub fn to_hb_str(&self) -> String {
+        self.to_string()
+    }
+
+    // -----------------------------------------------------------------------
+    // Numéricos
+    // -----------------------------------------------------------------------
+
+    /// Trunca sem arredondar, preservando N casas decimais.
+    /// Equivalente a `INT()` quando `decimals = 0`, ou ao padrão
+    /// `hb_numTrunc(n, nDec)` do Harbour para casas > 0.
+    /// Ex: `hb_trunc(1.999, 2)` → `1.99`
+    pub fn hb_trunc(&self, decimals: i32) -> HbValue {
+        let f = match self {
+            HbValue::Integer(n) => return HbValue::Integer(*n),
+            HbValue::Float(f)   => *f,
+            _                   => return HbValue::Nil,
+        };
+        if decimals <= 0 {
+            return HbValue::Integer(f.trunc() as i64);
+        }
+        let factor = 10f64.powi(decimals);
+        HbValue::Float((f * factor).trunc() / factor)
+    }
+
+    /// Arredonda para N casas decimais.
+    /// Equivalente a `ROUND(n, nDec)` do Harbour.
+    /// Ex: `hb_round(1.995, 2)` → `2.00`
+    pub fn hb_round(&self, decimals: i32) -> HbValue {
+        let f = match self {
+            HbValue::Integer(n) => *n as f64,
+            HbValue::Float(f)   => *f,
+            _                   => return HbValue::Nil,
+        };
+        let factor = 10f64.powi(decimals);
+        let rounded = (f * factor).round() / factor;
+        if decimals <= 0 {
+            HbValue::Integer(rounded as i64)
+        } else {
+            HbValue::Float(rounded)
+        }
+    }
+
+    /// Formata número com largura total e casas decimais, alinhado à direita.
+    /// Equivalente a `STR(n, nWidth, nDec)` do Harbour.
+    /// Ex: `STR(1234.5, 10, 2)` → `"   1234.50"`
+    pub fn hb_str_format(&self, width: i32, dec: i32) -> String {
+        let f = match self {
+            HbValue::Integer(n) => *n as f64,
+            HbValue::Float(f)   => *f,
+            _                   => return " ".repeat(width.max(0) as usize),
+        };
+        let dec = dec.max(0) as usize;
+        let s = if dec > 0 {
+            format!("{f:.dec$}")
+        } else {
+            format!("{:.0}", f)
+        };
+        let width = width.max(0) as usize;
+        if s.len() < width { format!("{s:>width$}") } else { s }
+    }
+
+    // -----------------------------------------------------------------------
+    // Data
+    // -----------------------------------------------------------------------
+
+    /// Formata `Date` no padrão `dd/mm/yyyy`.
+    /// Equivalente a `DTOC(d)` com formato brasileiro.
+    /// Ex: `Date(19814)` → `"24/03/2024"`
+    ///
+    /// Usa o algoritmo de Howard Hinnant para conversão de dias desde
+    /// 1970-01-01 sem dependências externas.
+    pub fn format_date(&self) -> String {
+        let days = match self {
+            HbValue::Date(d) => *d as i64,
+            _                => return String::new(),
+        };
+        // Algoritmo civil de Hinnant: shift para era iniciando em 1 Mar 0000
+        let z   = days + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = z - era * 146_097;                          // dia na era [0, 146096]
+        let yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365; // ano na era [0, 399]
+        let y   = yoe + era * 400;
+        let doy = doe - (365*yoe + yoe/4 - yoe/100);         // dia no ano [0, 365]
+        let mp  = (5*doy + 2) / 153;                          // mês interno [0, 11]
+        let d   = doy - (153*mp + 2)/5 + 1;                  // dia [1, 31]
+        let m   = if mp < 10 { mp + 3 } else { mp - 9 };     // mês [1, 12]
+        let y   = if m <= 2 { y + 1 } else { y };
+        format!("{:02}/{:02}/{:04}", d, m, y)
+    }
+
     /// Harbour `$` (substring test): `"bc" $ "abcd"` → .T.
     pub fn hb_instr_contains(&self, haystack: &HbValue) -> HbValue {
         match (self, haystack) {
@@ -299,6 +400,21 @@ mod tests {
     }
 
     #[test]
+    fn test_len() {
+        assert_eq!(HbValue::String("hello".into()).len(), 5);
+        assert_eq!(HbValue::Nil.len(), 0);
+        assert_eq!(HbValue::Integer(99).len(), 0);
+    }
+
+    #[test]
+    fn test_to_hb_str() {
+        assert_eq!(HbValue::String("abc".into()).to_hb_str(), "abc");
+        assert_eq!(HbValue::Integer(42).to_hb_str(), "42");
+        assert_eq!(HbValue::Logical(true).to_hb_str(), ".T.");
+        assert_eq!(HbValue::Nil.to_hb_str(), "");
+    }
+
+    #[test]
     fn test_instr() {
         let needle  = HbValue::String("bc".into());
         let haystack = HbValue::String("abcd".into());
@@ -310,5 +426,38 @@ mod tests {
         assert_eq!(HbValue::Nil.val_type(),        "U");
         assert_eq!(HbValue::Integer(1).val_type(), "N");
         assert_eq!(HbValue::String("".into()).val_type(), "C");
+    }
+
+    #[test]
+    fn test_hb_trunc() {
+        assert_eq!(HbValue::Float(1.999).hb_trunc(2), HbValue::Float(1.99));
+        assert_eq!(HbValue::Float(1.999).hb_trunc(0), HbValue::Integer(1));
+        assert_eq!(HbValue::Integer(5).hb_trunc(2),   HbValue::Integer(5));
+        assert_eq!(HbValue::Float(-1.999).hb_trunc(2), HbValue::Float(-1.99));
+    }
+
+    #[test]
+    fn test_hb_round() {
+        assert_eq!(HbValue::Float(1.995).hb_round(2), HbValue::Float(2.0));
+        assert_eq!(HbValue::Float(1.994).hb_round(2), HbValue::Float(1.99));
+        assert_eq!(HbValue::Float(1.5).hb_round(0),   HbValue::Integer(2));
+        assert_eq!(HbValue::Integer(7).hb_round(2),   HbValue::Float(7.0));
+    }
+
+    #[test]
+    fn test_hb_str_format() {
+        assert_eq!(HbValue::Float(1234.5).hb_str_format(10, 2), "   1234.50");
+        assert_eq!(HbValue::Integer(42).hb_str_format(6, 0),    "    42");
+        assert_eq!(HbValue::Float(3.1).hb_str_format(5, 2),     " 3.10");
+    }
+
+    #[test]
+    fn test_format_date() {
+        // 2024-03-24 = 19_806 dias desde 1970-01-01
+        // python: (date(2024,3,24) - date(1970,1,1)).days == 19806
+        assert_eq!(HbValue::Date(19806).format_date(), "24/03/2024");
+        // Epoch origin
+        assert_eq!(HbValue::Date(0).format_date(), "01/01/1970");
+        assert_eq!(HbValue::Nil.format_date(), "");
     }
 }

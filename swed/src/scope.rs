@@ -288,3 +288,186 @@ mod tests {
         assert!(env.resolve("X").is_some());
     }
 }
+
+// ---------------------------------------------------------------------------
+// IndexedFrame — extensão do ScopeFrame para acesso O(1) por usize
+//
+// Usado pela camada de geração de código quando o transpilador pode
+// provar estaticamente a ordem das variáveis LOCALs em uma procedure.
+// ---------------------------------------------------------------------------
+
+/// Um frame com resolução dupla: por nome (HashMap) e por índice (Vec).
+/// O índice corresponde à ordem de declaração das variáveis LOCAL.
+#[derive(Debug, Default)]
+pub struct IndexedFrame {
+    /// Mapeamento nome → slot index (construído na declaração)
+    name_to_idx: HashMap<String, usize>,
+    /// Valores indexados por slot (Vec → O(1))
+    slots: Vec<VarInfo>,
+}
+
+impl IndexedFrame {
+    pub fn new() -> Self {
+        IndexedFrame::default()
+    }
+
+    /// Declara uma variável e retorna seu índice de slot.
+    /// Chamado pelo transpilador na ordem de declaração.
+    pub fn declare(&mut self, name: &str, info: VarInfo) -> usize {
+        let key = name.to_ascii_uppercase();
+        if let Some(&idx) = self.name_to_idx.get(&key) {
+            // Redeclaração: atualiza mas mantém o índice existente
+            self.slots[idx] = info;
+            return idx;
+        }
+        let idx = self.slots.len();
+        self.slots.push(info);
+        self.name_to_idx.insert(key, idx);
+        idx
+    }
+
+    /// Acesso por nome (O(hash)) — usado na análise semântica.
+    pub fn get_by_name(&self, name: &str) -> Option<(usize, &VarInfo)> {
+        let key = name.to_ascii_uppercase();
+        self.name_to_idx.get(&key).map(|&idx| (idx, &self.slots[idx]))
+    }
+
+    /// Acesso por índice (O(1)) — usado no código gerado.
+    pub fn get_by_index(&self, idx: usize) -> Option<&VarInfo> {
+        self.slots.get(idx)
+    }
+
+    /// Número de variáveis declaradas.
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+}
+
+/// Slot index de uma variável LOCAL — newtype para clareza no codegen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalSlot(pub usize);
+
+/// Extensão do ScopeEnv com suporte a frames indexados.
+/// Coexiste com o ScopeEnv existente — adotado incrementalmente.
+#[derive(Debug, Default)]
+pub struct IndexedScopeEnv {
+    frames: Vec<IndexedFrame>,
+    current_module: String,
+}
+
+impl IndexedScopeEnv {
+    pub fn new(module: impl Into<String>) -> Self {
+        IndexedScopeEnv {
+            frames: vec![IndexedFrame::new()],
+            current_module: module.into(),
+        }
+    }
+
+    pub fn push_frame(&mut self) {
+        self.frames.push(IndexedFrame::new());
+    }
+
+    pub fn pop_frame(&mut self) {
+        if self.frames.len() > 1 {
+            self.frames.pop();
+        }
+    }
+
+    /// Declara uma LOCAL e retorna o LocalSlot para uso no codegen.
+    pub fn declare_local(&mut self, name: &str, hb_type: HbType) -> LocalSlot {
+        let info = VarInfo {
+            hb_type,
+            scope: VarScope::Local,
+            rust_ident: to_snake_case(name),
+        };
+        let idx = self.frames.last_mut()
+            .map(|f| f.declare(name, info))
+            .unwrap_or(0);
+        LocalSlot(idx)
+    }
+
+    /// Resolve por nome → (LocalSlot, &VarInfo)
+    pub fn resolve_by_name(&self, name: &str) -> Option<(LocalSlot, &VarInfo)> {
+        self.frames.last()
+            .and_then(|f| f.get_by_name(name))
+            .map(|(idx, info)| (LocalSlot(idx), info))
+    }
+
+    /// Resolve por slot (O(1)) — usado no código gerado em loops.
+    pub fn resolve_by_slot(&self, slot: LocalSlot) -> Option<&VarInfo> {
+        self.frames.last()
+            .and_then(|f| f.get_by_index(slot.0))
+    }
+
+    /// Número de LOCALs no frame atual — útil para gerar o array de slots.
+    pub fn local_count(&self) -> usize {
+        self.frames.last().map(|f| f.len()).unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod indexed_tests {
+    use super::*;
+
+    #[test]
+    fn test_indexed_frame_declare_and_get() {
+        let mut frame = IndexedFrame::new();
+        let info = VarInfo {
+            hb_type: HbType::Numeric,
+            scope: VarScope::Local,
+            rust_ident: "n_salary".into(),
+        };
+        let idx = frame.declare("NSALARY", info.clone());
+        assert_eq!(idx, 0);
+
+        let (slot, got) = frame.get_by_name("NSALARY").unwrap();
+        assert_eq!(slot, 0);
+        assert_eq!(got.rust_ident, "n_salary");
+
+        // Acesso O(1) por índice
+        let got2 = frame.get_by_index(0).unwrap();
+        assert_eq!(got2.rust_ident, "n_salary");
+    }
+
+    #[test]
+    fn test_indexed_scope_env() {
+        let mut env = IndexedScopeEnv::new("Calcular");
+        let slot_a = env.declare_local("NSALARIO", HbType::Numeric);
+        let slot_b = env.declare_local("CNAME",    HbType::String);
+
+        assert_eq!(slot_a, LocalSlot(0));
+        assert_eq!(slot_b, LocalSlot(1));
+
+        // Resolve por nome
+        let (s, info) = env.resolve_by_name("NSALARIO").unwrap();
+        assert_eq!(s, LocalSlot(0));
+        assert_eq!(info.hb_type, HbType::Numeric);
+
+        // Resolve por slot (O(1))
+        let info2 = env.resolve_by_slot(LocalSlot(1)).unwrap();
+        assert_eq!(info2.hb_type, HbType::String);
+
+        assert_eq!(env.local_count(), 2);
+    }
+
+    #[test]
+    fn test_indexed_frame_push_pop_isolation() {
+        let mut env = IndexedScopeEnv::new("Main");
+        env.declare_local("X", HbType::Numeric);
+        assert_eq!(env.local_count(), 1);
+
+        env.push_frame();
+        assert_eq!(env.local_count(), 0); // novo frame vazio
+        env.declare_local("Y", HbType::String);
+        assert_eq!(env.local_count(), 1);
+
+        env.pop_frame();
+        assert_eq!(env.local_count(), 1); // volta ao frame anterior
+        // Y não existe no frame original
+        assert!(env.resolve_by_name("Y").is_none());
+    }
+}

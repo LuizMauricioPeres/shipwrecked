@@ -696,7 +696,27 @@ impl Parser {
         let mut expr = self.parse_primary()?;
         loop {
             match self.peek().cloned() {
-                // array index: expr[idx]  — context: preceded by expr → always index
+                // array index: expr[idx]  — BracketString("idx") follows an expression.
+                // Re-normalize the content (uppercase) then sub-parse as an expression.
+                Some(Token::BracketString(s)) => {
+                    let s = s.clone();
+                    self.advance();
+                    let normalized = crate::lexer::normalize(s.trim());
+                    let sub_tokens: Vec<Token> = crate::lexer::tokenize(&normalized)
+                        .into_iter()
+                        .filter_map(|(t, _)| t.ok())
+                        .filter(|t| !matches!(t, Token::Newline))
+                        .collect();
+                    let mut sub = Parser::new(sub_tokens);
+                    let idx = sub.parse_expr().map_err(|e| {
+                        ParseError::Other(format!("invalid array index [{}]: {}", s.trim(), e))
+                    })?;
+                    expr = Expr {
+                        kind: ExprKind::Index(Box::new(expr), Box::new(idx)),
+                        span: sp..self.pos,
+                    };
+                }
+                // Kept for error-recovery on unclosed brackets
                 Some(Token::LBracket) => {
                     self.advance();
                     let idx = self.parse_expr()?;
@@ -757,18 +777,11 @@ impl Parser {
                 self.advance();
                 Ok(Expr::string(s, sp..self.pos))
             }
-            // Bracket string `[text]` — only valid as expression (postfix handles array index)
-            Some(Token::LBracket) => {
+            // Bracket string `[text]` — lexer emits BracketString with raw inner content.
+            Some(Token::BracketString(s)) => {
+                let s = s.clone();            
                 self.advance();
-                // Collect everything until matching RBracket as a string
-                let mut content = String::new();
-                while !matches!(self.peek(), Some(Token::RBracket) | None) {
-                    if let Some(tok) = self.advance() {
-                        content.push_str(&format!("{tok:?}"));
-                    }
-                }
-                self.expect(&Token::RBracket)?;
-                Ok(Expr::string(content, sp..self.pos))
+                Ok(Expr::string(s, sp..self.pos))
             }
             // Array literal: { e1, e2, ... }
             Some(Token::LBrace) => {

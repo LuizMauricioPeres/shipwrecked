@@ -187,6 +187,12 @@ pub enum Token {
     // ------------------------------------------------------------------
     // Literals
     // ------------------------------------------------------------------
+
+    /// `[text]` as a string literal — longest-match wins over `LBracket`.
+    /// Content is captured with original case (normalize skips `[…]`).
+    #[regex(r"\[[^\]]*\]", lex_bracket_string)]
+    BracketString(String),
+
     #[regex(r#""[^"]*""#, lex_string)]
     StringLit(String),
 
@@ -221,6 +227,11 @@ pub enum Token {
 
     #[regex(r"/\*([^*]|\*[^/])*\*/", logos::skip)]
     BlockComment,
+}
+
+fn lex_bracket_string(lex: &mut logos::Lexer<Token>) -> String {
+    let s = lex.slice();
+    s[1..s.len() - 1].to_string()
 }
 
 fn lex_string(lex: &mut logos::Lexer<Token>) -> String {
@@ -266,9 +277,20 @@ mod tests {
             .into_iter()
             .filter_map(|(t, _)| t.ok())
             .collect();
+        assert!(tokens.contains(&Token::BracketString("hello".into())));
         assert!(tokens.contains(&Token::LBracket));
     }
 
+    #[test]
+    fn test_bracket_string_preserves_case() {
+        let src = normalize("[Alice]");
+        let tokens: Vec<_> = tokenize(&src)
+            .into_iter()
+            .filter_map(|(t, _)| t.ok())
+            .collect();
+        assert_eq!(tokens[0], Token::BracketString("Alice".into()));
+     }
+     
     #[test]
     fn test_case_insensitive_keyword() {
         let src = normalize("procedure main");
