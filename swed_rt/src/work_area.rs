@@ -64,6 +64,13 @@ impl WorkArea {
             .unwrap_or(HbValue::Nil)
     }
 
+    /// Escreve um campo da linha atual por nome.
+    pub fn set_field(&mut self, name: &str, val: HbValue) {
+        if let Some(mut proxy) = self.navigator.current_row_mut() {
+            proxy.set_by_name(name, val);
+        }
+    }
+
     pub fn record_count(&self) -> usize { self.navigator.record_count() }
     pub fn current_pos(&self)  -> usize { self.navigator.current_position() }
     pub fn is_eof(&self)       -> bool  { self.navigator.is_eof() }
@@ -145,11 +152,28 @@ impl WorkAreaManager {
     }
 
     /// Lê campo da area SELECIONADA.
-    /// Ex: `NAME` (sem alias) → usa a area ativa
     pub fn field_current(&self, field: &str) -> HbValue {
         let alias = self.selected_alias();
         if alias.is_empty() { return HbValue::Nil; }
         self.field(&alias, field)
+    }
+
+    /// Escreve campo de uma área específica.
+    pub fn field_set(&self, alias: &str, field: &str, val: HbValue) {
+        let key = alias.to_ascii_uppercase();
+        if let Ok(mut m) = self.areas.write() {
+            if let Some(area) = m.get_mut(&key) {
+                area.set_field(field, val);
+            }
+        }
+    }
+
+    /// Escreve campo da área SELECIONADA.
+    pub fn field_set_current(&self, field: &str, val: HbValue) {
+        let alias = self.selected_alias();
+        if !alias.is_empty() {
+            self.field_set(&alias, field, val);
+        }
     }
 
     // ── Navegação ─────────────────────────────────────────────────────────

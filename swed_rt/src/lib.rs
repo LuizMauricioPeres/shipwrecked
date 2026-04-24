@@ -3,6 +3,7 @@
 
 pub mod array;
 pub mod builtins;
+pub mod publics_var;
 pub mod row;
 pub mod unwrap;
 pub mod value;
@@ -23,8 +24,32 @@ pub use unwrap::{
     IntoHbValue, ScopeStack, TryAsRust, UnwrapError,
 };
 
+// ── PUBLIC / MEMVAR variable store ───────────────────────────────────────────
+pub use publics_var::{public_store, PublicVars};
+
 // ── Work Area Manager ─────────────────────────────────────────────────────────
 pub use work_area::{with_work_areas, WorkArea, WorkAreaManager};
+
+/// Lê campo da área de trabalho atualmente selecionada.
+/// Gerado pelo transpilador para cada variável declarada com FIELD.
+pub fn field_get(name: &str) -> HbValue {
+    with_work_areas(|wam| wam.field_current(name))
+}
+
+/// Escreve campo da área de trabalho atualmente selecionada.
+pub fn field_set(name: &str, val: HbValue) {
+    with_work_areas(|wam| wam.field_set_current(name, val));
+}
+
+/// Lê campo de uma área específica (ALIAS->FIELD).
+pub fn field_get_alias(alias: &str, name: &str) -> HbValue {
+    with_work_areas(|wam| wam.field(alias, name))
+}
+
+/// Escreve campo de uma área específica.
+pub fn field_set_alias(alias: &str, name: &str, val: HbValue) {
+    with_work_areas(|wam| wam.field_set(alias, name, val));
+}
 
 // ── Built-in functions ────────────────────────────────────────────────────────
 pub use builtins::{
