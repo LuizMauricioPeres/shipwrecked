@@ -12,6 +12,19 @@ mod semantic;
 mod symbol_table;
 
 use std::{env, fs, path::PathBuf};
+use encoding_rs;
+
+/// Lê um .prg tolerando UTF-8 e Windows-1252 (legado Clipper/Harbour).
+/// Tenta UTF-8 primeiro; se inválido, decodifica como CP1252 sem perda.
+fn read_prg(path: &PathBuf) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    if let Ok(s) = std::str::from_utf8(&bytes) {
+        return Ok(s.to_owned());
+    }
+    // Fallback: Windows-1252 — todo byte é válido, nunca falha
+    let (cow, _, _) = encoding_rs::WINDOWS_1252.decode(&bytes);
+    Ok(cow.into_owned())
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -20,7 +33,7 @@ fn main() {
     let prg_path  = PathBuf::from(&args[1]);
     let docs_path = args.get(2).map(PathBuf::from);
 
-    let source = match fs::read_to_string(&prg_path) {
+    let source = match read_prg(&prg_path) {
         Ok(s) => s,
         Err(e) => { eprintln!("[swed] error: {e}"); std::process::exit(1); }
     };
