@@ -102,8 +102,10 @@ pub enum StmtKind {
     StaticDecl(VarDeclStmt),
     /// MEMVAR / PRIVATE x
     MemvarDecl(Vec<String>),
-    /// PUBLIC x
-    PublicDecl(Vec<String>),
+    /// PUBLIC x [, y := expr, ...]
+    PublicDecl(VarDeclStmt),
+    /// FIELD name1, name2 [IN alias]
+    FieldDecl { names: Vec<String>, alias: Option<String> },
 
     /// x := expr  or  x = expr  (legacy)
     Assign(AssignStmt),

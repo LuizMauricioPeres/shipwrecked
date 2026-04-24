@@ -117,10 +117,36 @@ impl Parser {
         let mut units = Vec::new();
         self.skip_newlines();
         while self.peek().is_some() {
+            // MEMVAR/PRIVATE at file level is a compiler hint — consume and discard.
+            if matches!(self.peek(), Some(Token::Memvar) | Some(Token::Private)) {
+                self.skip_top_level_memvar();
+                self.skip_newlines();
+                continue;
+            }
+            // FIELD at file level: module-scoped DB field declaration.
+            // Parsed but not promoted to a TopLevel unit — handled as a
+            // file-scope FieldDecl by storing in a pre-pass (codegen scans it).
+            // We skip it here to avoid "expected PROCEDURE" errors.
+            if matches!(self.peek(), Some(Token::FieldKw)) {
+                self.skip_top_level_memvar(); // same shape: keyword ident[,ident]* [IN ident]
+                self.skip_newlines();
+                continue;
+            }
             units.push(self.parse_top_level()?);
             self.skip_newlines();
         }
         Ok(Program { units })
+    }
+
+    fn skip_top_level_memvar(&mut self) {
+        self.advance(); // consume MEMVAR / PRIVATE
+        // Discard idents and commas until end of line
+        loop {
+            match self.peek() {
+                Some(Token::Ident(_)) | Some(Token::Comma) => { self.advance(); }
+                _ => break,
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -294,6 +320,7 @@ impl Parser {
             Some(Token::Static) => self.parse_var_decl(true, sp),
             Some(Token::Memvar) | Some(Token::Private) => self.parse_memvar(sp),
             Some(Token::Public) => self.parse_public(sp),
+            Some(Token::FieldKw) => self.parse_field(sp),
             Some(Token::If) => self.parse_if(sp),
             Some(Token::Do) => self.parse_do_while(sp),
             Some(Token::For) => self.parse_for(sp),
@@ -374,8 +401,8 @@ impl Parser {
         Ok(Stmt::new(StmtKind::MemvarDecl(names), sp..self.pos))
     }
 
-    fn parse_public(&mut self, sp: usize) -> Result<Stmt, ParseError> {
-        self.advance(); // PUBLIC
+    fn parse_field(&mut self, sp: usize) -> Result<Stmt, ParseError> {
+        self.advance(); // FIELD
         let mut names = Vec::new();
         loop {
             names.push(self.expect_ident()?);
@@ -385,7 +412,39 @@ impl Parser {
                 break;
             }
         }
-        Ok(Stmt::new(StmtKind::PublicDecl(names), sp..self.pos))
+        // Optional: IN alias
+        let alias = if matches!(self.peek(), Some(Token::Ident(s)) if s == "IN") {
+            self.advance(); // IN
+            Some(self.expect_ident()?)
+        } else {
+            None
+        };
+        Ok(Stmt::new(StmtKind::FieldDecl { names, alias }, sp..self.pos))
+    }
+
+    fn parse_public(&mut self, sp: usize) -> Result<Stmt, ParseError> {
+        self.advance(); // PUBLIC
+        let mut vars = Vec::new();
+        loop {
+            let vsp = self.pos;
+            let name = self.expect_ident()?;
+            let init = if matches!(self.peek(), Some(Token::Assign)) {
+                self.advance(); // :=
+                Some(self.parse_expr()?)
+            } else if matches!(self.peek(), Some(Token::Eq)) {
+                self.advance(); // legacy =
+                Some(self.parse_expr()?)
+            } else {
+                None
+            };
+            vars.push(VarInit { name, init, span: vsp..self.pos });
+            if matches!(self.peek(), Some(Token::Comma)) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        Ok(Stmt::new(StmtKind::PublicDecl(VarDeclStmt { vars }), sp..self.pos))
     }
 
     fn parse_if(&mut self, sp: usize) -> Result<Stmt, ParseError> {

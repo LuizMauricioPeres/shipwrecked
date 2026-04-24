@@ -154,14 +154,22 @@ impl<'a> Analyzer<'a> {
                     env.declare_static(&v.name, HbType::Any);
                 }
             }
+            StmtKind::FieldDecl { names, .. } => {
+                for n in names {
+                    env.declare_field(n);
+                }
+            }
             StmtKind::MemvarDecl(names) => {
                 for n in names {
                     env.declare_private(n, HbType::Any);
                 }
             }
-            StmtKind::PublicDecl(names) => {
-                for n in names {
-                    env.declare_public(n, HbType::Any);
+            StmtKind::PublicDecl(d) => {
+                for v in &d.vars {
+                    env.declare_public(&v.name, HbType::Any);
+                    if let Some(init) = &v.init {
+                        self.analyze_expr(init, env);
+                    }
                 }
             }
             StmtKind::Assign(a) => {

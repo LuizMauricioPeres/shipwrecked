@@ -45,8 +45,9 @@ pub struct VarInfo {
 pub enum VarScope {
     Local = 0,    // LOCAL  — innermost, highest priority
     Static = 1,   // STATIC — file-scoped, persists between calls
-    Private = 2,  // PRIVATE / MEMVAR — dynamic scope stack
-    Public = 3,   // PUBLIC — global memvar pool
+    DbField = 2,  // FIELD  — DB column, higher priority than MEMVAR
+    Private = 3,  // PRIVATE / MEMVAR — dynamic scope stack
+    Public = 4,   // PUBLIC — global memvar pool
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +136,19 @@ impl ScopeEnv {
         };
         let key = (self.current_module.clone(), name.to_ascii_uppercase());
         self.statics.insert(key, info);
+    }
+
+    pub fn declare_field(&mut self, name: &str) {
+        let info = VarInfo {
+            hb_type: HbType::Any,
+            scope: VarScope::DbField,
+            rust_ident: to_snake_case(name),
+        };
+        // Fields are stored in the current LOCAL frame so resolution
+        // checks them after LOCAL/STATIC but before MEMVAR/PUBLIC.
+        if let Some(frame) = self.call_stack.last_mut() {
+            frame.locals.insert(name.to_ascii_uppercase(), info);
+        }
     }
 
     pub fn declare_private(&mut self, name: &str, hb_type: HbType) {

@@ -8,17 +8,29 @@ use logos::Logos;
 /// Normalizes Harbour source to uppercase before lexing.
 /// Preserves string literals as-is.
 pub fn normalize(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
+    // Strip preprocessor directive lines before case-folding.
+    // Lines whose first non-space char is `#` are Harbour/xBase directives
+    // (#ifdef, #ifndef, #else, #endif, #define, #include, #undef, #command, etc.).
+    // We strip the marker lines and keep the code inside all branches — a proper
+    // preprocessor can be added later; for now this avoids parse errors on real files.
+    let stripped: String = src
+        .lines()
+        .map(|line| if line.trim_start().starts_with('#') { "" } else { line })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut out = String::with_capacity(stripped.len());
     let mut in_string = false;
     let mut string_delim = ' ';
-    let mut chars = src.chars().peekable();
+    let mut in_bracket = false; // [text] string literal — preserve case
 
-    while let Some(ch) = chars.next() {
+    for ch in stripped.chars() {
         if in_string {
             out.push(ch);
-            if ch == string_delim {
-                in_string = false;
-            }
+            if ch == string_delim { in_string = false; }
+        } else if in_bracket {
+            out.push(ch); // preserve original case inside [...]
+            if ch == ']' { in_bracket = false; }
         } else {
             match ch {
                 '"' | '\'' => {
@@ -26,8 +38,10 @@ pub fn normalize(src: &str) -> String {
                     string_delim = ch;
                     out.push(ch);
                 }
-                // Square-bracket strings are handled at the parser level
-                // (context-sensitive); pass through as-is here.
+                '[' => {
+                    in_bracket = true;
+                    out.push('[');
+                }
                 _ => out.push(ch.to_ascii_uppercase()),
             }
         }
@@ -57,6 +71,8 @@ pub enum Token {
     Static,
     #[token("MEMVAR")]
     Memvar,
+    #[token("FIELD")]
+    FieldKw,
     #[token("PUBLIC")]
     Public,
     #[token("PRIVATE")]
@@ -270,15 +286,16 @@ mod tests {
     }
 
     #[test]
-    fn test_bracket_ambiguity_emits_lbracket() {
-        // The lexer always emits LBracket; context resolution is parser-side.
+    fn test_bracket_ambiguity_emits_bracket_string() {
+        // logos longest-match: `[hello]` is always BracketString, never LBracket+Ident+RBracket.
+        // Context (string vs array-index) is resolved in the parser (parse_postfix).
         let src = normalize("= [hello]");
         let tokens: Vec<_> = tokenize(&src)
             .into_iter()
             .filter_map(|(t, _)| t.ok())
             .collect();
         assert!(tokens.contains(&Token::BracketString("hello".into())));
-        assert!(tokens.contains(&Token::LBracket));
+        assert!(!tokens.contains(&Token::LBracket));
     }
 
     #[test]
