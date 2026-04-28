@@ -1,0 +1,23 @@
+[package]
+name         = "swed_mkh"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+description  = "Harbour .prg symbol manifest analyser and .mkh emitter"
+
+[dependencies]
+md5      = "0.7"
+walkdir  = "2"
+
+[lints.rust]
+unsafe_code  = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all                     = "warn"
+pedantic                = "warn"
+module_name_repetitions = "allow"
+must_use_candidate      = "allow"
