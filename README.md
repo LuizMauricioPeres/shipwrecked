@@ -39,28 +39,37 @@
 ## Workspace layout
 
 ```
-swed/
-├── Cargo.toml          ← workspace root + transpiler binary
-├── hbdocs.json         ← Harbour built-in function signatures
+shipwrecked/
+├── Cargo.toml       ← workspace root
+├── hbdocs.json      ← Harbour built-in function signatures
 ├── examples/
-│   └── demo.prg        ← sample Harbour source
-├── src/
-│   ├── main.rs         ← CLI entry point + demo pipeline
-│   ├── ast.rs          ← AST node definitions
-│   ├── lexer.rs        ← Token definitions (logos)
-│   ├── parser.rs       ← Recursive-descent parser
-│   ├── scope.rs        ← Variable scope resolution
-│   ├── semantic.rs     ← Semantic analysis + diagnostics
-│   ├── symbol_table.rs ← hbdocs.json loader + arity validation
-│   ├── codegen.rs      ← AST → Rust source emitter
-│   └── hb_array.rs     ← Legacy codegen helper (superseded by swed_rt)
-└── swed_rt/
-    ├── Cargo.toml
-    └── src/
-        ├── lib.rs       ← Public API + hb_array! macro
-        ├── value.rs     ← HbValue enum + arithmetic operators
-        ├── array.rs     ← HbArray (1-indexed, dynamic)
-        └── builtins.rs  ← All Harbour built-in functions
+│
+├── swed/            ← transpiler binary (Lexer → Parser → Semantic → Codegen)
+├── swed_rt/         ← runtime linked by generated code (HbValue, builtins, DBF, PUBLIC vars)
+├── swed_mkh/        ← symbol manifest (.mkh) analyser + test generator (swed_testgen binary)
+│
+├── swed_co/         ← core types and traits (HbType, SwedError, NativeFunction, …)
+├── swed_bf/         ← Harbour built-in function implementations (Left, AllTrim, Date, …)
+├── swed_db/         ← database / RDD layer (WorkArea, DbfHandler — migrated from swed_rt)
+├── swed_io/         ← file I/O + encoding (CP1252 → UTF-8 via encoding_rs)
+├── swed_kn/         ← knife tools: ErrorInterceptor, hex dump, patch suggestions
+└── swed_ui/         ← TUI layer: Ratatui widgets, GetElement trait, @..SAY / @..GET / READ
+```
+
+### Crate dependency graph
+
+```
+swed_co  (no deps)
+   ├── swed_rt
+   │     ├── swed_bf
+   │     ├── swed_db
+   │     └── swed_kn
+   ├── swed_io
+   └── swed_ui
+         └── swed_rt
+
+swed_mkh  (standalone — analyses .prg, emits .mkh, generates tests)
+swed      (binary — links swed_rt + swed_mkh for the full pipeline)
 ```
 
 ## Harbour → Rust mapping
@@ -127,13 +136,32 @@ Add a new entry to register a custom function for arity validation:
 
 ## Roadmap
 
-- [ ] `swed_rt` DBF layer (`dbase` crate)
+### Done
+- [x] Lexer / Parser / Semantic / Codegen pipeline (~95%)
+- [x] `HbValue` type system with NIL-safe arithmetic
+- [x] `HbArray` (1-indexed) + `hb_array!` macro
+- [x] PUBLIC variable store (`publics_var` singleton)
+- [x] DBF layer (`WorkArea`, `DbfHandler`, `Row`) in `swed_rt`
+- [x] Symbol manifest (`.mkh`) analyser + emitter — `swed_mkh`
+- [x] Automated test generator — `swed_testgen` binary
+- [x] Windows-1252 encoding support in `main.rs`
+- [x] 167 workspace tests passing
+
+### In progress
+- [ ] `swed_co` — core types and traits (foundation for all new crates)
+- [ ] `swed_bf` — Harbour built-ins extracted from `swed_rt` into their own crate
+- [ ] `swed_db` — RDD layer migrated from `swed_rt`; `Rdd` trait for swappable drivers
+- [ ] `swed_io` — encoding / file utilities extracted from `main.rs`
+- [ ] `swed_kn` — `ErrorInterceptor` + hex dump + patch suggestions
+- [ ] `swed_ui` — Ratatui widgets, `GetElement` trait, `@..SAY` / `@..GET` / `READ` loop
+
+### Planned
+- [ ] VS Code Extension — SWed as LSP pre-compiler (Go-to-Definition via `.mkh`)
 - [ ] Full OOP: `CLASS` / `METHOD` / inheritance via traits
 - [ ] Harbour macro expansion (`#define`, `#include`, `&varName`)
 - [ ] `clap`-based CLI with `--output`, `--verbose`, `--check` flags
 - [ ] `miette`-powered diagnostics (rustc-style error messages)
-- [ ] Source maps (`.prg` line numbers in Rust output comments)
-- [ ] Parallel transpilation via `rayon`
+- [ ] Source maps (`.prg` line numbers in generated Rust output)
 
 ## License
 
