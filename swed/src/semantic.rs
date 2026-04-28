@@ -11,8 +11,9 @@
 //      - Unreachable code after RETURN (warning only).
 
 use crate::ast::*;
-use crate::scope::{HbType, ScopeEnv};
+use crate::scope::ScopeEnv;
 use crate::symbol_table::SymbolTable;
+use swed_co::HbType;
 
 // ---------------------------------------------------------------------------
 // Diagnostic
@@ -96,7 +97,7 @@ impl<'a> Analyzer<'a> {
     fn analyze_proc(&mut self, proc: &ProcDef) {
         let mut env = ScopeEnv::new(&proc.name);
         for param in &proc.params {
-            env.declare_local(&param.name, HbType::Any);
+            env.declare_local(&param.name, HbType::Unknown);
         }
         self.analyze_body(&proc.body, &mut env);
     }
@@ -104,7 +105,7 @@ impl<'a> Analyzer<'a> {
     fn analyze_func(&mut self, func: &FuncDef) {
         let mut env = ScopeEnv::new(&func.name);
         for param in &func.params {
-            env.declare_local(&param.name, HbType::Any);
+            env.declare_local(&param.name, HbType::Unknown);
         }
         self.analyze_body(&func.body, &mut env);
     }
@@ -113,7 +114,7 @@ impl<'a> Analyzer<'a> {
         for method in &class.methods {
             let mut env = ScopeEnv::new(format!("{}:{}", class.name, method.name));
             for param in &method.params {
-                env.declare_local(&param.name, HbType::Any);
+                env.declare_local(&param.name, HbType::Unknown);
             }
             self.analyze_body(&method.body, &mut env);
         }
@@ -143,7 +144,7 @@ impl<'a> Analyzer<'a> {
                     if let Some(init) = &v.init {
                         self.analyze_expr(init, env);
                     }
-                    env.declare_local(&v.name, HbType::Any);
+                    env.declare_local(&v.name, HbType::Unknown);
                 }
             }
             StmtKind::StaticDecl(d) => {
@@ -151,7 +152,7 @@ impl<'a> Analyzer<'a> {
                     if let Some(init) = &v.init {
                         self.analyze_expr(init, env);
                     }
-                    env.declare_static(&v.name, HbType::Any);
+                    env.declare_static(&v.name, HbType::Unknown);
                 }
             }
             StmtKind::FieldDecl { names, .. } => {
@@ -161,12 +162,12 @@ impl<'a> Analyzer<'a> {
             }
             StmtKind::MemvarDecl(names) => {
                 for n in names {
-                    env.declare_private(n, HbType::Any);
+                    env.declare_private(n, HbType::Unknown);
                 }
             }
             StmtKind::PublicDecl(d) => {
                 for v in &d.vars {
-                    env.declare_public(&v.name, HbType::Any);
+                    env.declare_public(&v.name, HbType::Unknown);
                     if let Some(init) = &v.init {
                         self.analyze_expr(init, env);
                     }
@@ -184,7 +185,7 @@ impl<'a> Analyzer<'a> {
                             ),
                             a.target.span.clone(),
                         );
-                        env.declare_private(name, HbType::Any);
+                        env.declare_private(name, HbType::Unknown);
                     }
                 } else {
                     self.analyze_expr(&a.target, env);
@@ -214,7 +215,7 @@ impl<'a> Analyzer<'a> {
                     self.analyze_expr(s, env);
                 }
                 // FOR variable is implicitly LOCAL to the loop
-                env.declare_local(&f.var, HbType::Any);
+                env.declare_local(&f.var, HbType::Unknown);
                 self.analyze_body(&f.body, env);
             }
             StmtKind::Return(e) => {

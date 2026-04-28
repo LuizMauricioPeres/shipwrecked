@@ -9,28 +9,11 @@
 // a thread-local "memvar pool").
 
 use std::collections::HashMap;
+use swed_co::HbType;
 
 // ---------------------------------------------------------------------------
 // Variable metadata
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum HbType {
-    Any,       // U — untyped (most Harbour vars)
-    Numeric,   // N
-    String,    // C
-    Logical,   // L
-    Array,     // A
-    Object,    // O
-    Date,      // D
-    Nil,
-}
-
-impl Default for HbType {
-    fn default() -> Self {
-        HbType::Any
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct VarInfo {
@@ -140,7 +123,7 @@ impl ScopeEnv {
 
     pub fn declare_field(&mut self, name: &str) {
         let info = VarInfo {
-            hb_type: HbType::Any,
+            hb_type: HbType::Unknown,
             scope: VarScope::DbField,
             rust_ident: to_snake_case(name),
         };
@@ -257,19 +240,19 @@ mod tests {
     #[test]
     fn test_local_shadows_public() {
         let mut env = ScopeEnv::new("test_mod");
-        env.declare_public("X", HbType::Numeric);
-        env.declare_local("X", HbType::String);
+        env.declare_public("X", HbType::Float);
+        env.declare_local("X", HbType::Character);
 
         let info = env.resolve("X").unwrap();
         assert_eq!(info.scope, VarScope::Local);
-        assert_eq!(info.hb_type, HbType::String);
+        assert_eq!(info.hb_type, HbType::Character);
     }
 
     #[test]
     fn test_static_shadows_private() {
         let mut env = ScopeEnv::new("mymod");
-        env.declare_private("COUNTER", HbType::Numeric);
-        env.declare_static("COUNTER", HbType::Numeric);
+        env.declare_private("COUNTER", HbType::Float);
+        env.declare_static("COUNTER", HbType::Float);
 
         let info = env.resolve("COUNTER").unwrap();
         assert_eq!(info.scope, VarScope::Static);
@@ -291,7 +274,7 @@ mod tests {
     #[test]
     fn test_frame_push_pop() {
         let mut env = ScopeEnv::new("mod");
-        env.declare_local("X", HbType::Numeric);
+        env.declare_local("X", HbType::Float);
         assert!(env.resolve("X").is_some());
 
         env.push_frame();
@@ -431,7 +414,7 @@ mod indexed_tests {
     fn test_indexed_frame_declare_and_get() {
         let mut frame = IndexedFrame::new();
         let info = VarInfo {
-            hb_type: HbType::Numeric,
+            hb_type: HbType::Float,
             scope: VarScope::Local,
             rust_ident: "n_salary".into(),
         };
@@ -450,8 +433,8 @@ mod indexed_tests {
     #[test]
     fn test_indexed_scope_env() {
         let mut env = IndexedScopeEnv::new("Calcular");
-        let slot_a = env.declare_local("NSALARIO", HbType::Numeric);
-        let slot_b = env.declare_local("CNAME",    HbType::String);
+        let slot_a = env.declare_local("NSALARIO", HbType::Float);
+        let slot_b = env.declare_local("CNAME",    HbType::Character);
 
         assert_eq!(slot_a, LocalSlot(0));
         assert_eq!(slot_b, LocalSlot(1));
@@ -459,11 +442,11 @@ mod indexed_tests {
         // Resolve por nome
         let (s, info) = env.resolve_by_name("NSALARIO").unwrap();
         assert_eq!(s, LocalSlot(0));
-        assert_eq!(info.hb_type, HbType::Numeric);
+        assert_eq!(info.hb_type, HbType::Float);
 
         // Resolve por slot (O(1))
         let info2 = env.resolve_by_slot(LocalSlot(1)).unwrap();
-        assert_eq!(info2.hb_type, HbType::String);
+        assert_eq!(info2.hb_type, HbType::Character);
 
         assert_eq!(env.local_count(), 2);
     }
@@ -471,12 +454,12 @@ mod indexed_tests {
     #[test]
     fn test_indexed_frame_push_pop_isolation() {
         let mut env = IndexedScopeEnv::new("Main");
-        env.declare_local("X", HbType::Numeric);
+        env.declare_local("X", HbType::Float);
         assert_eq!(env.local_count(), 1);
 
         env.push_frame();
         assert_eq!(env.local_count(), 0); // novo frame vazio
-        env.declare_local("Y", HbType::String);
+        env.declare_local("Y", HbType::Character);
         assert_eq!(env.local_count(), 1);
 
         env.pop_frame();

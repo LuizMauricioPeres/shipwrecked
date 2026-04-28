@@ -9,6 +9,7 @@ authors.workspace      = true
 description  = "Harbour .prg symbol manifest analyser and .mkh emitter"
 
 [dependencies]
+swed_co  = { path = "../swed_co" }
 md5      = "0.7"
 walkdir  = "2"
 
