@@ -235,10 +235,10 @@ impl Default for WorkAreaManager {
 // Global singleton — thread_local para isolamento por thread (Browse reativo)
 // ---------------------------------------------------------------------------
 
-/// Acesso ao WorkAreaManager global via thread_local.
-/// Cada thread tem sua própria instância — sem contention em acessos
-/// de leitura single-thread (Browse principal + threads de background
-/// trabalham em instâncias separadas).
+// Acesso ao WorkAreaManager global via thread_local.
+// Cada thread tem sua própria instância — sem contention em acessos
+// de leitura single-thread (Browse principal + threads de background
+// trabalham em instâncias separadas).
 thread_local! {
     static WORK_AREAS: WorkAreaManager = WorkAreaManager::new();
 }

@@ -3,6 +3,7 @@
 
 pub mod array;
 pub mod builtins;
+pub mod dbf_handler;
 pub mod publics_var;
 pub mod row;
 pub mod unwrap;
@@ -29,6 +30,9 @@ pub use publics_var::{public_store, PublicVars};
 
 // ── Work Area Manager ─────────────────────────────────────────────────────────
 pub use work_area::{with_work_areas, WorkArea, WorkAreaManager};
+
+// ── DBF handler ───────────────────────────────────────────────────────────────
+pub use dbf_handler::{DbfError, DbfField, DbfHeader, DbfNavigator, DbfReader, FieldValue};
 
 /// Lê campo da área de trabalho atualmente selecionada.
 /// Gerado pelo transpilador para cada variável declarada com FIELD.
