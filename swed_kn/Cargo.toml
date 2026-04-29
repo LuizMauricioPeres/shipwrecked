@@ -1,0 +1,23 @@
+[package]
+name         = "swed_kn"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+description  = "Shipwrecked Knife Tools — ErrorInterceptor, hex dump, patch suggestions"
+
+[dependencies]
+swed_co = { path = "../swed_co" }
+swed_rt = { path = "../swed_rt" }
+
+[lints.rust]
+unsafe_code  = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all                     = "warn"
+pedantic                = "warn"
+module_name_repetitions = "allow"
+must_use_candidate      = "allow"
