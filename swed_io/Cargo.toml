@@ -1,0 +1,24 @@
+[package]
+name         = "swed_io"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+description  = "Shipwrecked I/O — file reading with CP1252/UTF-8 encoding detection"
+
+[dependencies]
+swed_co     = { path = "../swed_co" }
+swed_rt     = { path = "../swed_rt" }
+encoding_rs = "0.8"
+
+[lints.rust]
+unsafe_code  = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+all                     = "warn"
+pedantic                = "warn"
+module_name_repetitions = "allow"
+must_use_candidate      = "allow"
