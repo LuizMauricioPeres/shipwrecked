@@ -156,6 +156,27 @@ impl std::ops::Not for HbValue {
 }
 
 // ---------------------------------------------------------------------------
+// Index operator — arr[&HbValue::Integer(i)] com base-1 do Harbour
+// ---------------------------------------------------------------------------
+
+// Sentinel estático para retornar &HbValue::Nil sem alocar.
+static HB_NIL: HbValue = HbValue::Nil;
+
+impl std::ops::Index<&HbValue> for HbValue {
+    type Output = HbValue;
+
+    fn index(&self, index: &HbValue) -> &HbValue {
+        match (self, index) {
+            (HbValue::Array(arr), HbValue::Integer(i)) if *i >= 1 => {
+                // Harbour é base-1 → ajusta para base-0 do Rust aqui, uma vez só.
+                arr.0.get((*i - 1) as usize).unwrap_or(&HB_NIL)
+            }
+            _ => &HB_NIL,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Comparison operators
 // ---------------------------------------------------------------------------
 
@@ -206,6 +227,15 @@ impl HbValue {
         match self {
             HbValue::String(s) => s.len(),
             HbValue::Array(a)  => a.len(),
+            _ => 0,
+        }
+    }
+
+    /// Comprimento como `i64` — usado em ranges de loop gerado: `2..=arr.hb_len_as_i64()`.
+    pub fn hb_len_as_i64(&self) -> i64 {
+        match self {
+            HbValue::String(s) => s.len() as i64,
+            HbValue::Array(a)  => a.len() as i64,
             _ => 0,
         }
     }
@@ -426,6 +456,60 @@ mod tests {
         assert_eq!(HbValue::Nil.val_type(),        "U");
         assert_eq!(HbValue::Integer(1).val_type(), "N");
         assert_eq!(HbValue::String("".into()).val_type(), "C");
+    }
+
+    #[test]
+    fn test_index_by_hbvalue() {
+        use crate::array::HbArray;
+        let mut a = HbArray::new();
+        a.hb_aadd(HbValue::Integer(10));
+        a.hb_aadd(HbValue::Integer(20));
+        a.hb_aadd(HbValue::Integer(30));
+        let arr = HbValue::Array(a);
+
+        assert_eq!(arr[&HbValue::Integer(1)], HbValue::Integer(10));
+        assert_eq!(arr[&HbValue::Integer(2)], HbValue::Integer(20));
+        assert_eq!(arr[&HbValue::Integer(3)], HbValue::Integer(30));
+        // fora dos limites → Nil
+        assert_eq!(arr[&HbValue::Integer(99)], HbValue::Nil);
+        // índice inválido (0 ou negativo) → Nil
+        assert_eq!(arr[&HbValue::Integer(0)], HbValue::Nil);
+        // tipo de índice errado → Nil
+        assert_eq!(arr[&HbValue::Nil], HbValue::Nil);
+        // acesso em não-array → Nil
+        assert_eq!(HbValue::Integer(5)[&HbValue::Integer(1)], HbValue::Nil);
+    }
+
+    #[test]
+    fn test_index_maxscore_pattern() {
+        use crate::array::HbArray;
+        let mut a = HbArray::new();
+        for v in [3i64, 7, 1, 9, 4] {
+            a.hb_aadd(HbValue::Integer(v));
+        }
+        let aarr = HbValue::Array(a);
+
+        // Padrão gerado pelo codegen: sem .clone() dentro do loop
+        let mut nmax = &aarr[&HbValue::Integer(1)];
+        for i in 2..=(aarr.hb_len_as_i64()) {
+            let idx = HbValue::Integer(i);
+            let cur = &aarr[&idx];
+            if cur > nmax {
+                nmax = cur;
+            }
+        }
+        assert_eq!(nmax.clone(), HbValue::Integer(9));
+    }
+
+    #[test]
+    fn test_hb_len_as_i64() {
+        use crate::array::HbArray;
+        let mut a = HbArray::new();
+        a.hb_aadd(HbValue::Nil);
+        a.hb_aadd(HbValue::Nil);
+        assert_eq!(HbValue::Array(a).hb_len_as_i64(), 2);
+        assert_eq!(HbValue::String("hello".into()).hb_len_as_i64(), 5);
+        assert_eq!(HbValue::Nil.hb_len_as_i64(), 0);
     }
 
     #[test]
