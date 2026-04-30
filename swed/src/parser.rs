@@ -346,6 +346,13 @@ impl Parser {
                 Ok(Stmt::new(StmtKind::Print(expr), sp..self.pos))
             }
 
+            Some(Token::At) => self.parse_at_stmt(sp),
+
+            Some(Token::Read) => {
+                self.advance();
+                Ok(Stmt::new(StmtKind::Read, sp..self.pos))
+            }
+
             Some(Token::Ident(_)) => self.parse_ident_stmt(sp),
             Some(other) => Err(ParseError::Unexpected {
                 got: format!("{other:?}"),
@@ -353,6 +360,50 @@ impl Parser {
                 pos: sp,
             }),
             None => Err(ParseError::Eof("statement".into())),
+        }
+    }
+
+    // ── @ row, col SAY/GET ───────────────────────────────────────────────
+
+    fn parse_at_stmt(&mut self, sp: usize) -> Result<Stmt, ParseError> {
+        self.advance(); // consume `@`
+        let row = self.parse_expr()?;
+        self.expect(&Token::Comma)?;
+        let col = self.parse_expr()?;
+
+        match self.peek().cloned() {
+            Some(Token::Say) => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                // PICTURE clause is accepted but ignored on SAY
+                self.try_consume_picture();
+                Ok(Stmt::new(StmtKind::AtSay(AtSayStmt { row, col, expr }), sp..self.pos))
+            }
+            Some(Token::Get) => {
+                self.advance();
+                let var = self.expect_ident()?;
+                let picture = self.try_consume_picture();
+                Ok(Stmt::new(StmtKind::AtGet(AtGetStmt { row, col, var, picture }), sp..self.pos))
+            }
+            Some(other) => Err(ParseError::Unexpected {
+                got: format!("{other:?}"),
+                expected: "SAY or GET after @row,col".into(),
+                pos: self.pos,
+            }),
+            None => Err(ParseError::Eof("SAY or GET".into())),
+        }
+    }
+
+    /// Consome `PICTURE "mask"` se presente; retorna a string da máscara.
+    fn try_consume_picture(&mut self) -> Option<String> {
+        if !matches!(self.peek(), Some(Token::Picture)) {
+            return None;
+        }
+        self.advance(); // consume PICTURE
+        match self.advance() {
+            Some(Token::StringLit(s)) | Some(Token::StringLitSingle(s)) => Some(s),
+            Some(Token::BracketString(s)) => Some(s),
+            _ => None,
         }
     }
 

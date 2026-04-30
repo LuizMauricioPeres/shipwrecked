@@ -223,6 +223,25 @@ impl<'a> Analyzer<'a> {
                     self.analyze_expr(expr, env);
                 }
             }
+
+            StmtKind::AtSay(say) => {
+                self.analyze_expr(&say.row, env);
+                self.analyze_expr(&say.col, env);
+                self.analyze_expr(&say.expr, env);
+            }
+            StmtKind::AtGet(get) => {
+                self.analyze_expr(&get.row, env);
+                self.analyze_expr(&get.col, env);
+                // A variável do GET deve existir no escopo
+                if env.resolve(&get.var).is_none() {
+                    self.warn(
+                        format!("GET variable `{}` not declared before use", get.var),
+                        get.row.span.clone(),
+                    );
+                    env.declare_private(&get.var, swed_co::HbType::Unknown);
+                }
+            }
+            StmtKind::Read => {}
         }
     }
 

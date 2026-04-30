@@ -1,0 +1,20 @@
+[package]
+name         = "demo"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+description  = "SWed demo — código Harbour transpilado para Rust"
+
+[[bin]]
+name = "demo"
+path = "demo.rs"
+
+[dependencies]
+swed_rt = { path = "../swed_rt" }
+swed_db = { path = "../swed_db" }
+
+[lints]
+workspace = true

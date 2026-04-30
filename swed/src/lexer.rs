@@ -115,6 +115,22 @@ pub enum Token {
     False,
 
     // ------------------------------------------------------------------
+    // Screen / UI command keywords
+    // ------------------------------------------------------------------
+    /// `SAY` — used in `@ row, col SAY expr`
+    #[token("SAY")]
+    Say,
+    /// `GET` — used in `@ row, col GET varname [PICTURE "mask"]`
+    #[token("GET")]
+    Get,
+    /// `READ` — triggers the interactive form loop
+    #[token("READ")]
+    Read,
+    /// `PICTURE` — optional clause after GET
+    #[token("PICTURE")]
+    Picture,
+
+    // ------------------------------------------------------------------
     // Operators — ORDER MATTERS: longer patterns first
     // ------------------------------------------------------------------
     #[token(":=")]

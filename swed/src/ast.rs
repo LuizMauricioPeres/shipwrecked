@@ -127,6 +127,31 @@ pub enum StmtKind {
 
     /// RETURN [expr]
     Return(Option<Expr>),
+
+    /// `@ row, col SAY expr [PICTURE "mask"]`
+    AtSay(AtSayStmt),
+    /// `@ row, col GET varname [PICTURE "mask"]`
+    AtGet(AtGetStmt),
+    /// `READ` — inicia o loop interativo de formulário
+    Read,
+}
+
+// ── @..SAY / @..GET ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct AtSayStmt {
+    pub row:  Expr,
+    pub col:  Expr,
+    pub expr: Expr,
+}
+
+#[derive(Debug, Clone)]
+pub struct AtGetStmt {
+    pub row:     Expr,
+    pub col:     Expr,
+    pub var:     String,
+    /// Máscara PICTURE opcional, ex: `"@!"`, `"9999.99"`, `"L"`.
+    pub picture: Option<String>,
 }
 
 // ── Variable declaration ─────────────────────────────────────────────────
