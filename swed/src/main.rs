@@ -44,13 +44,30 @@ fn main() {
         }),
         None => symbol_table::SymbolTable::with_builtins(),
     };
-    let rust_src = transpile(&source, &sym);
-    let out_path = prg_path.with_extension("rs");
-    fs::write(&out_path, &rust_src).expect("could not write output");
+
+    let stem = prg_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+
+    let (main_src, module_src) = transpile_dual(&source, &sym, stem);
+
+    let out_path    = prg_path.with_extension("rs");
+    let module_path = prg_path.with_file_name(format!("{stem}_module.rs"));
+
+    fs::write(&out_path,    &main_src).expect("could not write output");
+    fs::write(&module_path, &module_src).expect("could not write module");
+
     println!("[swed] written → {out_path:?}");
+    println!("[swed] written → {module_path:?}");
 }
 
-fn transpile(source: &str, sym: &symbol_table::SymbolTable) -> String {
+/// Transpila um .prg para o par (main_rs, module_rs) do sistema Dual-File.
+fn transpile_dual(
+    source: &str,
+    sym: &symbol_table::SymbolTable,
+    stem: &str,
+) -> (String, String) {
     let normalized = lexer::normalize(source);
     let token_stream: Vec<lexer::Token> = lexer::tokenize(&normalized)
         .into_iter().filter_map(|(t, _)| t.ok()).collect();
@@ -62,8 +79,9 @@ fn transpile(source: &str, sym: &symbol_table::SymbolTable) -> String {
     analyzer.analyze(&program);
     analyzer.print_diagnostics("<input>");
     if analyzer.has_errors() { eprintln!("[swed] aborting."); std::process::exit(1); }
-    codegen::generate(&program)
+    codegen::generate_dual(&program, stem)
 }
+
 
 fn run_demo() {
     let harbour_src = r#"
