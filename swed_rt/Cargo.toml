@@ -9,5 +9,3 @@ authors.workspace      = true
 description  = "Shipwrecked runtime — HbValue, HbArray and Harbour built-in functions for transpiled code"
 
 [dependencies]
-thiserror  = "1.0.69"
-byteorder  = "1.5"

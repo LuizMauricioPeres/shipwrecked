@@ -1,4 +1,5 @@
-// swed_rt/src/row.rs
+// swed_db/src/dbf/row.rs
+#![allow(missing_docs)]
 // RowSchema + RowProxy — indexed field access for DBF/SQL/in-memory rows.
 //
 // O problema central do xBase em Rust:
@@ -20,7 +21,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::value::HbValue;
+use swed_rt::HbValue;
 
 // ---------------------------------------------------------------------------
 // FieldIndex — newtype para evitar confusão com índices genéricos
@@ -72,7 +73,6 @@ impl RowSchema {
     }
 
     /// Resolve nome → índice. Retorna None se o campo não existe.
-    /// Usado no código gerado para cachear o índice em uma variável LOCAL.
     pub fn resolve(&self, name: &str) -> Option<FieldIndex> {
         self.index_map.get(&name.to_ascii_uppercase()).copied()
     }
@@ -108,8 +108,6 @@ pub type Row = Vec<HbValue>;
 // ---------------------------------------------------------------------------
 
 /// Proxy de leitura/escrita para uma linha.
-/// Combina a linha de dados com o schema para oferecer acesso
-/// tanto por índice (O(1)) quanto por nome (com custo de resolve único).
 pub struct RowProxy<'a> {
     schema: Arc<RowSchema>,
     row: &'a mut Row,
@@ -124,8 +122,6 @@ impl<'a> RowProxy<'a> {
 
     #[inline(always)]
     pub fn get(&self, idx: FieldIndex) -> &HbValue {
-        // SAFETY: FieldIndex só é emitido pelo schema desta linha;
-        // o transpilador garante que o índice é válido em tempo de compilação.
         self.row.get(idx.0).unwrap_or(&HbValue::Nil)
     }
 
@@ -164,9 +160,6 @@ impl<'a> RowProxy<'a> {
 
 // ---------------------------------------------------------------------------
 // DataNavigator trait — contrato para Browse reativo
-//
-// Qualquer fonte de dados (DBF, SQLite, in-memory Vec) implementa este trait.
-// O Browse consome DataNavigator sem conhecer o driver subjacente.
 // ---------------------------------------------------------------------------
 
 pub trait DataNavigator: Send + Sync {
@@ -189,7 +182,6 @@ pub trait DataNavigator: Send + Sync {
     fn current_row(&self) -> Option<Row>;
 
     /// Lê a linha atual como RowProxy mutável.
-    /// Implementações devem manter buffer interno para mutação.
     fn current_row_mut(&mut self) -> Option<RowProxy<'_>>;
 
     /// Persiste modificações na linha atual (flush para DBF/SQL).
@@ -256,7 +248,7 @@ impl DataNavigator for InMemoryTable {
     }
 
     fn commit(&mut self) -> Result<(), String> {
-        Ok(()) // in-memory: já mutado in-place
+        Ok(())
     }
 }
 
@@ -336,11 +328,8 @@ mod tests {
 
     #[test]
     fn test_schema_resolve_caches_index_pattern() {
-        // Simula o padrão de uso no transpilador:
-        // 1. resolve() UMA VEZ antes do loop → salva FieldIndex
-        // 2. usa o índice em TODAS as iterações
         let schema = Arc::new(make_schema());
-        let idx_salary = schema.resolve("SALARY").unwrap(); // <── fora do loop
+        let idx_salary = schema.resolve("SALARY").unwrap();
 
         let mut rows: Vec<Row> = (0..1000)
             .map(|i| vec![
@@ -352,8 +341,8 @@ mod tests {
 
         let mut total = 0.0f64;
         for row in &mut rows {
-            let mut proxy = RowProxy::new(Arc::clone(&schema), row);
-            if let HbValue::Float(s) = proxy.get(idx_salary) { // <── O(1) aqui
+            let proxy = RowProxy::new(Arc::clone(&schema), row);
+            if let HbValue::Float(s) = proxy.get(idx_salary) {
                 total += s;
             }
         }

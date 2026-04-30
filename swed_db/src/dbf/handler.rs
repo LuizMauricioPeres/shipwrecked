@@ -1,4 +1,4 @@
-// swed_rt/src/dbf_handler.rs
+// swed_db/src/dbf/handler.rs
 //! Low-level dBase III/IV reader with `DataNavigator` integration.
 //!
 //! ## Wire Format
@@ -16,18 +16,6 @@
 //! | `header_size` | `record_size × n` | Records                             |
 //!
 //! Each record begins with a deletion byte: `0x20` = active, `0x2A` = deleted.
-//!
-//! ## Concurrency
-//!
-//! Files are opened with `read(true).write(false)` — no exclusive lock is
-//! acquired on POSIX systems, so a legacy dBase/Harbour process can hold the
-//! file open in shared mode simultaneously.
-//!
-//! ## Memory model
-//!
-//! `DbfReader` uses a 64 KiB `BufReader` for sequential reads within each
-//! record.  Only the current record is kept in RAM; the rest of the file
-//! is read on demand via `Seek`.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -36,9 +24,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use byteorder::{LittleEndian, ReadBytesExt};
+use swed_rt::HbValue;
 
-use crate::row::{DataNavigator, FieldMeta, Row, RowProxy, RowSchema};
-use crate::value::HbValue;
+use crate::dbf::row::{DataNavigator, FieldMeta, Row, RowProxy, RowSchema};
 
 // ── Error ─────────────────────────────────────────────────────────────────────
 
@@ -61,8 +49,7 @@ pub enum DbfError {
     #[error("record index {0} out of range (file has {1} records)")]
     OutOfRange(usize, u32),
 
-    /// Record deletion byte is `0x2A`.  The public `read_record` API surfaces
-    /// this as an error so callers can implement `SET DELETED ON/OFF` logic.
+    /// Record deletion byte is `0x2A`.
     #[error("record {0} is marked for deletion (flag 0x2A)")]
     RecordDeleted(usize),
 
@@ -74,18 +61,15 @@ pub enum DbfError {
 // ── DbfHeader ─────────────────────────────────────────────────────────────────
 
 /// Parsed dBase III/IV file header.
-///
-/// Parsed manually via `byteorder` (Little Endian) rather than
-/// `#[repr(C, packed)]`, which would require `unsafe` for field access.
 #[derive(Debug, Clone)]
 pub struct DbfHeader {
     /// `0x03` = dBase III, `0x04` = dBase IV.
     pub version: u8,
-    /// Last update as `(full_year, month, day)` — raw byte + 1900 for year.
+    /// Last update as `(full_year, month, day)`.
     pub last_update: (u16, u8, u8),
     /// Total records in file, **including** deleted ones.
     pub record_count: u32,
-    /// Byte offset of the first record; also the total header block size.
+    /// Byte offset of the first record.
     pub header_size: u16,
     /// Size of one record in bytes (deletion flag + sum of all field widths).
     pub record_size: u16,
@@ -110,7 +94,6 @@ impl DbfHeader {
             return Err(DbfError::InvalidHeader(header_size, record_size));
         }
 
-        // Skip reserved bytes 12–31 (20 bytes).
         let mut reserved = [0u8; 20];
         r.read_exact(&mut reserved)?;
 
@@ -126,22 +109,20 @@ impl DbfHeader {
 
 // ── DbfField ──────────────────────────────────────────────────────────────────
 
-/// Metadata for a single column from the DBF header (32-byte descriptor block).
+/// Metadata for a single column from the DBF header.
 #[derive(Debug, Clone)]
 pub struct DbfField {
     /// Field name in ASCII-uppercase, stripped of null-padding.
     pub name: String,
-    /// xBase type code: `C` = Character, `N` = Numeric, `L` = Logical,
-    /// `D` = Date.  Unrecognised types (e.g. `M` Memo) decode to `Nil`.
+    /// xBase type code: `C` = Character, `N` = Numeric, `L` = Logical, `D` = Date.
     pub field_type: char,
-    /// Total column width in bytes as declared in the header.
+    /// Total column width in bytes.
     pub length: u8,
     /// Decimal places (meaningful only for `N` fields).
     pub decimals: u8,
 }
 
 impl DbfField {
-    /// Returns `Ok(None)` when the header terminator byte `0x0D` is encountered.
     fn parse<R: Read>(r: &mut R) -> Result<Option<Self>, DbfError> {
         let mut name_buf = [0u8; 11];
         r.read_exact(&mut name_buf)?;
@@ -158,7 +139,7 @@ impl DbfField {
 
         let field_type = r.read_u8()? as char;
 
-        let mut addr = [0u8; 4]; // field data address — reserved in dBase III
+        let mut addr = [0u8; 4];
         r.read_exact(&mut addr)?;
 
         let length   = r.read_u8()?;
@@ -181,13 +162,13 @@ impl DbfField {
 pub enum FieldValue {
     /// `C` — character string; trailing spaces stripped; CP-1252 → UTF-8.
     Character(String),
-    /// `N` — numeric; always widened to `f64` regardless of decimal count.
+    /// `N` — numeric; always widened to `f64`.
     Numeric(f64),
     /// `L` — logical (`T`/`Y` = true, `F`/`N` = false).
     Logical(bool),
-    /// `D` — date encoded as days since 1970-01-01, matching `HbValue::Date`.
+    /// `D` — date encoded as days since 1970-01-01.
     Date(i32),
-    /// Empty / undefined: blank numeric, empty date, unrecognised type.
+    /// Empty / undefined.
     Nil,
 }
 
@@ -206,10 +187,6 @@ impl From<FieldValue> for HbValue {
 // ── DbfReader ─────────────────────────────────────────────────────────────────
 
 /// Low-level dBase III/IV file reader.
-///
-/// Seek-on-demand: only one record is read per call to `read_record`; the
-/// rest of the file stays on disk.  A 64 KiB `BufReader` amortises the
-/// sequential reads within each record's field data.
 pub struct DbfReader {
     reader: BufReader<File>,
     /// Parsed file header (version, geometry, record count).
@@ -220,9 +197,6 @@ pub struct DbfReader {
 
 impl DbfReader {
     /// Open a `.dbf` file, validate its header, and parse all field descriptors.
-    ///
-    /// The file descriptor is opened with `read(true)` only — no write or
-    /// create flags — so no exclusive OS-level lock is held on POSIX systems.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, DbfError> {
         let file = OpenOptions::new()
             .read(true)
@@ -233,8 +207,6 @@ impl DbfReader {
         let mut reader = BufReader::with_capacity(65_536, file);
         let header = DbfHeader::parse(&mut reader)?;
 
-        // Upper bound: field slots between the 32-byte fixed header and
-        // header_size.  The loop breaks early on the 0x0D terminator.
         let max_fields = usize::from(header.header_size.saturating_sub(32)) / 32;
         let mut fields = Vec::with_capacity(max_fields);
 
@@ -248,11 +220,7 @@ impl DbfReader {
         Ok(DbfReader { reader, header, fields })
     }
 
-    /// Read one record by 0-based index, returning its decoded field map.
-    ///
-    /// Returns `Err(DbfError::RecordDeleted)` when the deletion byte is
-    /// `0x2A`.  Callers that implement `SET DELETED OFF` should use
-    /// `read_record_raw` (available to crate-internal code) instead.
+    /// Read one record by 0-based index.
     pub fn read_record(&mut self, index: usize) -> Result<HashMap<String, FieldValue>, DbfError> {
         let (deleted, map) = self.read_record_raw(index)?;
         if deleted {
@@ -263,9 +231,6 @@ impl DbfReader {
     }
 
     /// Build a `RowSchema` from the parsed field descriptors.
-    ///
-    /// Call this once during `WorkArea` registration and cache the result
-    /// via `Arc` for O(1) field resolution inside hot navigation loops.
     pub fn build_schema(&self) -> RowSchema {
         RowSchema::new(
             self.fields.iter().map(|f| FieldMeta {
@@ -277,10 +242,6 @@ impl DbfReader {
         )
     }
 
-    /// Reads a record including deleted ones, returning `(is_deleted, fields)`.
-    ///
-    /// Used internally by `DbfNavigator` to populate the look-aside cache
-    /// while still exposing the deletion flag via `is_deleted()`.
     pub(crate) fn read_record_raw(
         &mut self,
         index: usize,
@@ -316,7 +277,7 @@ fn decode_field(field: &DbfField, raw: &[u8]) -> Result<FieldValue, DbfError> {
         'N' => decode_numeric(raw),
         'L' => Ok(decode_logical(raw)),
         'D' => decode_date(raw),
-        _   => Ok(FieldValue::Nil), // M (Memo), B (Blob) — Sprint 4+
+        _   => Ok(FieldValue::Nil),
     }
 }
 
@@ -327,7 +288,6 @@ fn decode_character(raw: &[u8]) -> Result<FieldValue, DbfError> {
             .trim_end_matches(' ')
             .to_owned()
     } else {
-        // Inline CP-1252 → UTF-8 decode; avoids adding encoding_rs to swed_rt.
         cp1252_decode(raw).trim_end_matches(' ').to_owned()
     };
     Ok(FieldValue::Character(s))
@@ -338,7 +298,6 @@ fn decode_numeric(raw: &[u8]) -> Result<FieldValue, DbfError> {
         .map_err(|_| DbfError::Decode("N field contains non-ASCII bytes".into()))?
         .trim();
     if s.is_empty() || s.starts_with('*') {
-        // '*' is the dBase overflow marker; empty means uninitialized.
         return Ok(FieldValue::Nil);
     }
     s.parse::<f64>()
@@ -350,7 +309,7 @@ fn decode_logical(raw: &[u8]) -> FieldValue {
     match raw.first().copied().unwrap_or(b' ') {
         b'T' | b't' | b'Y' | b'y' => FieldValue::Logical(true),
         b'F' | b'f' | b'N' | b'n' => FieldValue::Logical(false),
-        _ => FieldValue::Nil, // '?' = uninitialized in dBase
+        _ => FieldValue::Nil,
     }
 }
 
@@ -378,10 +337,7 @@ fn decode_date(raw: &[u8]) -> Result<FieldValue, DbfError> {
 }
 
 /// Howard Hinnant civil-date algorithm: `(year, month 1–12, day 1–31)` →
-/// days since 1970-01-01.  Works for any proleptic Gregorian date.
-///
-/// Mirrors the inverse algorithm already used in `HbValue::format_date()`,
-/// keeping `swed_rt` free of `chrono` as a dependency.
+/// days since 1970-01-01.
 fn civil_to_epoch_days(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
@@ -392,12 +348,7 @@ fn civil_to_epoch_days(y: i64, m: i64, d: i64) -> i64 {
 }
 
 /// Decodes a CP-1252 (Windows-1252) byte slice to UTF-8 without external crates.
-///
-/// * `0x00–0x7F` — identical to ASCII / UTF-8.
-/// * `0x80–0x9F` — special Unicode mappings via lookup table.
-/// * `0xA0–0xFF` — Latin-1 Supplement; byte value equals the Unicode code point.
 fn cp1252_decode(raw: &[u8]) -> String {
-    // Unicode values for CP-1252 bytes 0x80–0x9F.
     const MAP: [char; 32] = [
         '€',        '\u{FFFD}', '‚',        'ƒ',        '„',        '…',
         '†',        '‡',        'ˆ',        '‰',        'Š',        '‹',
@@ -409,40 +360,23 @@ fn cp1252_decode(raw: &[u8]) -> String {
     raw.iter().map(|&b| match b {
         0x00..=0x7F => b as char,
         0x80..=0x9F => MAP[usize::from(b - 0x80)],
-        _           => b as char, // 0xA0–0xFF: byte == Unicode scalar
+        _           => b as char,
     }).collect()
 }
 
 // ── DbfNavigator — DataNavigator implementation ────────────────────────────────
 
 /// `DataNavigator` backed by a real `.dbf` file on disk.
-///
-/// Navigation is seek-based: `goto()` and `skip()` seek to the target record,
-/// read it into a one-record look-aside cache, and return.  `current_row()`
-/// clones from that cache — no I/O on field access inside hot loops.
-///
-/// Deleted records (flag `0x2A`) have their field data fully decoded and
-/// available via `current_row()`, enabling `SET DELETED OFF` semantics.
-/// Use `is_deleted()` to test the deletion flag for the current position.
-///
-/// Write-back (`REPLACE`, `APPEND`) is planned for Sprint 4.
 pub struct DbfNavigator {
     reader:  DbfReader,
     schema:  Arc<RowSchema>,
     pos:     usize,
-    /// Cached row for the current position — populated by `goto` / `skip`.
     current: Option<Row>,
-    /// True when the record at `pos` has the deletion flag set.
     deleted: bool,
 }
 
 impl DbfNavigator {
     /// Open a `.dbf` file and position the cursor at record 0.
-    ///
-    /// # Errors
-    ///
-    /// Returns `DbfError` if the file cannot be opened, has an invalid header,
-    /// or the first record cannot be read.
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, DbfError> {
         let reader = DbfReader::open(path)?;
         let schema = Arc::new(reader.build_schema());
@@ -453,7 +387,6 @@ impl DbfNavigator {
             current: None,
             deleted: false,
         };
-        // Pre-load record 0 so `current_row()` works without a prior `goto()`.
         if nav.reader.header.record_count > 0 {
             nav.refresh_current();
         }
@@ -461,16 +394,10 @@ impl DbfNavigator {
     }
 
     /// Returns `true` when the record at the current position is marked deleted.
-    ///
-    /// Mirrors the Harbour `DELETED()` function.  The corresponding row is
-    /// still accessible via `current_row()` (all-`Nil` values) so that
-    /// callers implementing `SET DELETED OFF` can still display field data.
     pub fn is_deleted(&self) -> bool {
         self.deleted
     }
 
-    /// Seek to `self.pos`, read the record, and populate `self.current`.
-    /// Called after every navigation operation that changes `self.pos`.
     fn refresh_current(&mut self) {
         match self.reader.read_record_raw(self.pos) {
             Ok((is_deleted, map)) => {
@@ -512,7 +439,7 @@ impl DataNavigator for DbfNavigator {
             self.refresh_current();
             true
         } else {
-            self.pos = self.record_count(); // EOF sentinel
+            self.pos = self.record_count();
             self.current = None;
             self.deleted = false;
             false
@@ -529,12 +456,10 @@ impl DataNavigator for DbfNavigator {
         self.current.clone()
     }
 
-    /// Write-back to `.dbf` (REPLACE / APPEND) is planned for Sprint 4.
     fn current_row_mut(&mut self) -> Option<RowProxy<'_>> {
         None
     }
 
-    /// Write-back to `.dbf` is not yet implemented.
     fn commit(&mut self) -> Result<(), String> {
         Err("DbfNavigator is read-only in this version".into())
     }
@@ -547,7 +472,47 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    // ── Unit: field decoders ──────────────────────────────────────────────────
+    fn write_synthetic_dbf(path: &std::path::Path) {
+        let mut buf: Vec<u8> = Vec::new();
+
+        buf.push(0x03);
+        buf.extend([0x7A, 0x04, 0x1B]);
+        buf.extend(2u32.to_le_bytes());
+        buf.extend(97u16.to_le_bytes());
+        buf.extend(14u16.to_le_bytes());
+        buf.extend([0u8; 20]);
+
+        let mut name = [0u8; 11];
+        name[..4].copy_from_slice(b"NAME");
+        buf.extend(name);
+        buf.push(b'C');
+        buf.extend([0u8; 4]);
+        buf.push(10);
+        buf.push(0);
+        buf.extend([0u8; 14]);
+
+        let mut age = [0u8; 11];
+        age[..3].copy_from_slice(b"AGE");
+        buf.extend(age);
+        buf.push(b'N');
+        buf.extend([0u8; 4]);
+        buf.push(3);
+        buf.push(0);
+        buf.extend([0u8; 14]);
+
+        buf.push(0x0D);
+
+        buf.push(0x20);
+        buf.extend(b"Alice     ");
+        buf.extend(b" 30");
+
+        buf.push(0x2A);
+        buf.extend(b"Bob       ");
+        buf.extend(b" 25");
+
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(&buf).unwrap();
+    }
 
     #[test]
     fn test_decode_character_ascii() {
@@ -557,7 +522,6 @@ mod tests {
 
     #[test]
     fn test_decode_character_cp1252() {
-        // 0xE3 = 'ã' (U+00E3) in CP-1252 — Latin-1 Supplement range (0xA0–0xFF)
         let raw = b"S\xE3o Paulo  ";
         let fv = decode_character(raw).unwrap();
         assert_eq!(fv, FieldValue::Character("São Paulo".into()));
@@ -597,7 +561,6 @@ mod tests {
 
     #[test]
     fn test_decode_date_valid() {
-        // 2024-03-24 → 19806 days since 1970-01-01
         let fv = decode_date(b"20240324").unwrap();
         assert_eq!(fv, FieldValue::Date(19_806));
     }
@@ -616,7 +579,6 @@ mod tests {
 
     #[test]
     fn test_civil_to_epoch_days() {
-        // Verified against Python: (date(2024,3,24) - date(1970,1,1)).days == 19806
         assert_eq!(civil_to_epoch_days(2024, 3, 24), 19_806);
         assert_eq!(civil_to_epoch_days(1970, 1, 1),  0);
         assert_eq!(civil_to_epoch_days(2000, 1, 1),  10_957);
@@ -624,67 +586,12 @@ mod tests {
 
     #[test]
     fn test_cp1252_euro_sign() {
-        // 0x80 = € in CP-1252
         assert_eq!(cp1252_decode(&[0x80]), "€");
     }
 
     #[test]
     fn test_cp1252_latin1_supplement() {
-        // 0xE9 = é in both CP-1252 and Latin-1 / Unicode
         assert_eq!(cp1252_decode(&[b'p', b'r', 0xE9, b'c', b'o']), "préco");
-    }
-
-    // ── Integration: synthetic DBF buffer ────────────────────────────────────
-
-    /// Builds a minimal valid dBase III buffer with two fields (NAME C/10, AGE N/3)
-    /// and two records (one active, one deleted) into a temp file.
-    fn write_synthetic_dbf(path: &std::path::Path) {
-        let mut buf: Vec<u8> = Vec::new();
-
-        // ── Header (32 bytes) ─────────────────────────────────────────────────
-        buf.push(0x03);          // version: dBase III
-        buf.extend([0x7A, 0x04, 0x1B]); // last update: 2022-04-27
-        buf.extend(2u32.to_le_bytes()); // record_count = 2
-        // header_size = 32 (fixed) + 2×32 (fields) + 1 (terminator) = 97
-        buf.extend(97u16.to_le_bytes());
-        // record_size = 1 (flag) + 10 (NAME) + 3 (AGE) = 14
-        buf.extend(14u16.to_le_bytes());
-        buf.extend([0u8; 20]); // reserved
-
-        // ── Field 1: NAME C/10 ───────────────────────────────────────────────
-        let mut name = [0u8; 11];
-        name[..4].copy_from_slice(b"NAME");
-        buf.extend(name);
-        buf.push(b'C');          // type
-        buf.extend([0u8; 4]);   // reserved addr
-        buf.push(10);            // length
-        buf.push(0);             // decimals
-        buf.extend([0u8; 14]);  // reserved
-
-        // ── Field 2: AGE N/3 ─────────────────────────────────────────────────
-        let mut age = [0u8; 11];
-        age[..3].copy_from_slice(b"AGE");
-        buf.extend(age);
-        buf.push(b'N');
-        buf.extend([0u8; 4]);
-        buf.push(3);
-        buf.push(0);
-        buf.extend([0u8; 14]);
-
-        buf.push(0x0D); // header terminator
-
-        // ── Record 0: active ─────────────────────────────────────────────────
-        buf.push(0x20);                   // active
-        buf.extend(b"Alice     ");        // NAME (10 bytes)
-        buf.extend(b" 30");              // AGE  (3 bytes)
-
-        // ── Record 1: deleted ────────────────────────────────────────────────
-        buf.push(0x2A);                   // deleted
-        buf.extend(b"Bob       ");        // NAME
-        buf.extend(b" 25");              // AGE
-
-        let mut f = std::fs::File::create(path).unwrap();
-        f.write_all(&buf).unwrap();
     }
 
     #[test]
@@ -728,8 +635,7 @@ mod tests {
 
         nav.skip(1);
         assert_eq!(nav.current_position(), 1);
-        assert!(nav.is_deleted()); // record 1 is marked deleted
-        // Field data is still decoded for deleted records (SET DELETED OFF semantics).
+        assert!(nav.is_deleted());
         let row1 = nav.current_row().unwrap();
         assert_eq!(row1[0], HbValue::String("Bob".into()));
         assert_eq!(row1[1], HbValue::Float(25.0));
@@ -738,7 +644,7 @@ mod tests {
         assert_eq!(nav.current_position(), 0);
         assert!(!nav.is_eof());
 
-        nav.skip(99); // beyond EOF
+        nav.skip(99);
         assert!(nav.is_eof());
 
         std::fs::remove_file(&path).ok();
@@ -767,8 +673,8 @@ mod tests {
         let path = dir.join("swed_test_bad_ver.dbf");
         {
             let mut f = std::fs::File::create(&path).unwrap();
-            let mut buf = vec![0u8; 97 + 28]; // enough bytes to not hit EOF first
-            buf[0] = 0x07; // unsupported version
+            let mut buf = vec![0u8; 97 + 28];
+            buf[0] = 0x07;
             f.write_all(&buf).unwrap();
         }
         assert!(matches!(

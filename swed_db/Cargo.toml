@@ -9,15 +9,9 @@ authors.workspace      = true
 description  = "Shipwrecked database engine — RDD / DBF access layer"
 
 [dependencies]
-swed_co = { path = "../swed_co" }
-swed_rt = { path = "../swed_rt" }
+swed_rt  = { path = "../swed_rt" }
+thiserror = "1.0.69"
+byteorder = "1.5"
 
-[lints.rust]
-unsafe_code  = "forbid"
-missing_docs = "warn"
-
-[lints.clippy]
-all                     = "warn"
-pedantic                = "warn"
-module_name_repetitions = "allow"
-must_use_candidate      = "allow"
+[lints]
+workspace = true

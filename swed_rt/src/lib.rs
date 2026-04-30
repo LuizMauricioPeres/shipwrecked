@@ -3,22 +3,13 @@
 
 pub mod array;
 pub mod builtins;
-pub mod dbf_handler;
 pub mod publics_var;
-pub mod row;
 pub mod unwrap;
 pub mod value;
-pub mod work_area;
 
 // ── Core types ───────────────────────────────────────────────────────────────
 pub use array::HbArray;
 pub use value::HbValue;
-
-// ── Row / DataNavigator ───────────────────────────────────────────────────────
-pub use row::{
-    DataNavigator, FieldIndex, FieldMeta,
-    InMemoryTable, Row, RowProxy, RowSchema,
-};
 
 // ── Unwrap traits ─────────────────────────────────────────────────────────────
 pub use unwrap::{
@@ -27,33 +18,6 @@ pub use unwrap::{
 
 // ── PUBLIC / MEMVAR variable store ───────────────────────────────────────────
 pub use publics_var::{public_store, PublicVars};
-
-// ── Work Area Manager ─────────────────────────────────────────────────────────
-pub use work_area::{with_work_areas, WorkArea, WorkAreaManager};
-
-// ── DBF handler ───────────────────────────────────────────────────────────────
-pub use dbf_handler::{DbfError, DbfField, DbfHeader, DbfNavigator, DbfReader, FieldValue};
-
-/// Lê campo da área de trabalho atualmente selecionada.
-/// Gerado pelo transpilador para cada variável declarada com FIELD.
-pub fn field_get(name: &str) -> HbValue {
-    with_work_areas(|wam| wam.field_current(name))
-}
-
-/// Escreve campo da área de trabalho atualmente selecionada.
-pub fn field_set(name: &str, val: HbValue) {
-    with_work_areas(|wam| wam.field_set_current(name, val));
-}
-
-/// Lê campo de uma área específica (ALIAS->FIELD).
-pub fn field_get_alias(alias: &str, name: &str) -> HbValue {
-    with_work_areas(|wam| wam.field(alias, name))
-}
-
-/// Escreve campo de uma área específica.
-pub fn field_set_alias(alias: &str, name: &str, val: HbValue) {
-    with_work_areas(|wam| wam.field_set(alias, name, val));
-}
 
 // ── Built-in functions ────────────────────────────────────────────────────────
 pub use builtins::{
@@ -101,22 +65,6 @@ mod tests {
     }
 
     #[test]
-    fn test_full_row_pipeline() {
-        // Schema → RowProxy → FieldIndex → O(1) access
-        let schema = RowSchema::new(vec![
-            FieldMeta { name: "NOME".into(), dbf_type: 'C', size: 40, decimals: 0 },
-            FieldMeta { name: "SALDO".into(), dbf_type: 'N', size: 12, decimals: 2 },
-        ]);
-        let idx_saldo = schema.resolve("SALDO").unwrap();
-
-        let mut table = InMemoryTable::new(schema, vec![]);
-        table.push_row(vec![HbValue::String("Alice".into()), HbValue::Float(9500.0)]);
-
-        let row = table.current_row().unwrap();
-        assert_eq!(row.get(idx_saldo.0), Some(&HbValue::Float(9500.0)));
-    }
-
-    #[test]
     fn test_scope_and_unwrap_integration() {
         let scope = ScopeStack::new();
         scope.inject("NVAL", HbValue::Float(42.5));
@@ -127,18 +75,5 @@ mod tests {
 
         let result = (f * 2.0).into_hb();
         assert_eq!(result, HbValue::Float(85.0));
-    }
-
-    #[test]
-    fn test_work_area_integration() {
-        with_work_areas(|wam| {
-            let schema = RowSchema::new(vec![
-                FieldMeta { name: "COD".into(), dbf_type: 'C', size: 10, decimals: 0 },
-            ]);
-            let mut table = InMemoryTable::new(schema, vec![]);
-            table.push_row(vec![HbValue::String("001".into())]);
-            wam.open("TEST", Box::new(table));
-            assert_eq!(wam.field("TEST", "COD"), HbValue::String("001".into()));
-        });
     }
 }

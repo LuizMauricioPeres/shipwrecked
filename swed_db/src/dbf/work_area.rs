@@ -1,19 +1,12 @@
-// swed_rt/src/work_area.rs
+// swed_db/src/dbf/work_area.rs
+#![allow(missing_docs)]
 // Global Work Area Manager — gerencia o estado Alias→WorkArea
 // protegido por RwLock (leitura concorrente, escrita exclusiva).
-//
-// Modela o mecanismo de Work Areas do Harbour/Clipper:
-//   SELECT CUST   →  work_area_manager.select("CUST")
-//   CUST->NAME    →  work_area_manager.field("CUST", "NAME")
-//   DBGOBOTTOM    →  work_area_manager.goto_bottom("CUST")
-//
-// O estado global é thread-safe e acessível em blocos #BEGINDUMP
-// via work_areas() → &WorkAreaManager.
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock, RwLock};
-use crate::value::HbValue;
-use crate::row::{DataNavigator, FieldIndex, Row, RowProxy, RowSchema};
+use std::sync::RwLock;
+use swed_rt::HbValue;
+use crate::dbf::row::{DataNavigator, FieldIndex};
 
 // ---------------------------------------------------------------------------
 // WorkArea — um slot de tabela aberta
@@ -25,7 +18,6 @@ pub struct WorkArea {
     /// Driver da fonte de dados (DBF, SQLite, InMemory…)
     pub navigator: Box<dyn DataNavigator>,
     /// Cache de resolução nome→índice para esta work area.
-    /// Evita chamadas repetidas a schema().resolve() em loops.
     field_cache: HashMap<String, FieldIndex>,
 }
 
@@ -90,9 +82,7 @@ impl WorkArea {
 // ---------------------------------------------------------------------------
 
 pub struct WorkAreaManager {
-    /// Mapa alias → WorkArea
     areas: RwLock<HashMap<String, WorkArea>>,
-    /// Area selecionada no momento (alias UPPERCASE ou vazio)
     selected: RwLock<String>,
 }
 
@@ -112,7 +102,6 @@ impl WorkAreaManager {
         if let Ok(mut m) = self.areas.write() {
             m.insert(key.clone(), WorkArea::new(&key, navigator));
         }
-        // Seleciona automaticamente a area recém-aberta
         if let Ok(mut sel) = self.selected.write() {
             *sel = key;
         }
@@ -140,7 +129,6 @@ impl WorkAreaManager {
     // ── Acesso a dados ────────────────────────────────────────────────────
 
     /// `ALIAS->FIELD` — lê campo de uma area específica.
-    /// Ex: `CUST->NAME` → `wam.field("CUST", "NAME")`
     pub fn field(&self, alias: &str, field: &str) -> HbValue {
         let key = alias.to_ascii_uppercase();
         if let Ok(mut m) = self.areas.write() {
@@ -232,21 +220,14 @@ impl Default for WorkAreaManager {
 }
 
 // ---------------------------------------------------------------------------
-// Global singleton — thread_local para isolamento por thread (Browse reativo)
+// Global singleton — thread_local para isolamento por thread
 // ---------------------------------------------------------------------------
 
-// Acesso ao WorkAreaManager global via thread_local.
-// Cada thread tem sua própria instância — sem contention em acessos
-// de leitura single-thread (Browse principal + threads de background
-// trabalham em instâncias separadas).
 thread_local! {
     static WORK_AREAS: WorkAreaManager = WorkAreaManager::new();
 }
 
 /// Executa uma closure com acesso ao WorkAreaManager da thread atual.
-/// Padrão de uso gerado pelo transpilador:
-///
-///   with_work_areas(|wam| wam.field("CUST", "NAME"))
 pub fn with_work_areas<F, R>(f: F) -> R
 where
     F: FnOnce(&WorkAreaManager) -> R,
@@ -261,11 +242,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::row::{FieldMeta, InMemoryTable, RowSchema};
+    use crate::dbf::row::{FieldMeta, InMemoryTable, RowSchema};
 
     fn make_cust_table() -> Box<dyn DataNavigator> {
         let schema = RowSchema::new(vec![
-            FieldMeta { name: "NAME".into(),   dbf_type: 'C', size: 40, decimals: 0 },
+            FieldMeta { name: "NAME".into(),    dbf_type: 'C', size: 40, decimals: 0 },
             FieldMeta { name: "BALANCE".into(), dbf_type: 'N', size: 12, decimals: 2 },
         ]);
         let mut table = InMemoryTable::new(schema, vec![]);
@@ -312,19 +293,10 @@ mod tests {
 
     #[test]
     fn test_field_cache_pattern() {
-        // Simula o padrão de resolução único + acesso em loop:
-        //   SELECT CUST
-        //   DBGOTOP()
-        //   DO WHILE !EOF()
-        //      ? CUST->NAME
-        //      DBSKIP()
-        //   ENDDO
         let wam = WorkAreaManager::new();
         wam.open("CUST", make_cust_table());
 
         let mut names = vec![];
-        // O field_cache dentro de WorkArea garante que "NAME" só é
-        // resolvido UMA vez mesmo neste loop:
         wam.goto_top("CUST");
         loop {
             if wam.is_eof("CUST") { break; }
