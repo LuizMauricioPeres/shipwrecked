@@ -240,6 +240,21 @@ impl HbValue {
         }
     }
 
+    /// `LEN()` — retorna comprimento como `HbValue::Integer`.
+    /// Espelha `HbArray::hb_len()` para uso em parâmetros dinâmicos (`HbValue`).
+    pub fn hb_len(&self) -> HbValue {
+        HbValue::Integer(self.hb_len_as_i64())
+    }
+
+    /// Acesso indexado 1-based em arrays dinâmicos — `arr[i]` em código gerado.
+    /// Retorna `HbValue::Nil` para índice fora de bounds ou se não for Array.
+    pub fn hb_get_val(&self, index: HbValue) -> HbValue {
+        match self {
+            HbValue::Array(a) => a.hb_get_val(index),
+            _ => HbValue::Nil,
+        }
+    }
+
     /// Coerção para string — espelho de `cValToChar()` do Harbour.
     pub fn to_hb_str(&self) -> String {
         self.to_string()
