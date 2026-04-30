@@ -11,6 +11,8 @@ description  = "Shipwrecked TUI — Ratatui widgets, GetElement trait, @..SAY / 
 [dependencies]
 swed_co = { path = "../swed_co" }
 swed_rt = { path = "../swed_rt" }
+ratatui    = "0.30"
+crossterm  = "0.29"
 
 [lints.rust]
 unsafe_code  = "forbid"
