@@ -110,6 +110,18 @@ pub enum StmtKind {
     /// x := expr  or  x = expr  (legacy)
     Assign(AssignStmt),
 
+    /// STORE value TO var1, var2, ...
+    Store(StoreStmt),
+
+    /// EXIT — sai do loop
+    Exit,
+
+    /// LOOP — vai para próxima iteração (CONTINUE)
+    Loop,
+
+    /// CLS — limpa a tela
+    Cls,
+
     /// AAdd(arr, val), QOut(...), or any call used as statement
     Call(CallExpr),
 
@@ -134,6 +146,13 @@ pub enum StmtKind {
     AtGet(AtGetStmt),
     /// `READ` — inicia o loop interativo de formulário
     Read,
+}
+
+// ── STORE ────────────────────────────────────────────────────────────────
+#[derive(Debug, Clone)]
+pub struct StoreStmt {
+    pub value: Expr,
+    pub vars: Vec<String>,
 }
 
 // ── @..SAY / @..GET ──────────────────────────────────────────────────────
@@ -267,6 +286,10 @@ pub enum BinOp {
 pub enum UnOp {
     Neg,
     Not,
+    PreIncrement,  // ++i
+    PreDecrement,  // --i
+    PostIncrement, // i++
+    PostDecrement, // i--
 }
 
 // ---------------------------------------------------------------------------

@@ -109,6 +109,22 @@ impl Parser {
         self.pos..self.pos
     }
 
+    /// The `BracketString` regex `\[[^\]]*\]` stops at the first `]`, so nested
+    /// indexing like `arr[inner[i]]` produces `BracketString(" inner[i ")` + `RBracket`
+    /// in the token stream.  This method appends one `]` per consumed `RBracket`
+    /// until open and close counts balance, enabling recursive sub-parsing.
+    fn balance_bracket_content(&mut self, mut content: String) -> String {
+        let open  = content.chars().filter(|&c| c == '[').count();
+        let close = content.chars().filter(|&c| c == ']').count();
+        let mut needed = open.saturating_sub(close);
+        while needed > 0 && matches!(self.peek(), Some(Token::RBracket)) {
+            self.advance();
+            content.push(']');
+            needed -= 1;
+        }
+        content
+    }
+
     // -----------------------------------------------------------------------
     // Entry point
     // -----------------------------------------------------------------------
@@ -155,6 +171,25 @@ impl Parser {
 
     fn parse_top_level(&mut self) -> Result<TopLevel, ParseError> {
         match self.peek() {
+            Some(Token::Static) => {
+                self.advance(); // consume STATIC
+                match self.peek() {
+                    Some(Token::Procedure) => {
+                        // Não consumir aqui; parse_proc() vai fazer isso
+                        Ok(TopLevel::Procedure(self.parse_proc()?))
+                    }
+                    Some(Token::Function) => {
+                        // Não consumir aqui; parse_func() vai fazer isso
+                        Ok(TopLevel::Function(self.parse_func()?))
+                    }
+                    Some(other) => Err(ParseError::Unexpected {
+                        got: format!("{other:?}"),
+                        expected: "PROCEDURE or FUNCTION after STATIC".into(),
+                        pos: self.pos,
+                    }),
+                    None => Err(ParseError::Eof("top-level declaration".into())),
+                }
+            }
             Some(Token::Procedure) => Ok(TopLevel::Procedure(self.parse_proc()?)),
             Some(Token::Function) => Ok(TopLevel::Function(self.parse_func()?)),
             Some(Token::Class) => Ok(TopLevel::Class(self.parse_class()?)),
@@ -292,6 +327,7 @@ impl Parser {
                 | Some(Token::Procedure)
                 | Some(Token::Function)
                 | Some(Token::Class)
+                | Some(Token::Static)
                 | Some(Token::EndClass) => break,
                 Some(Token::Return) => {
                     stmts.push(self.parse_return()?);
@@ -323,7 +359,21 @@ impl Parser {
             Some(Token::FieldKw) => self.parse_field(sp),
             Some(Token::If) => self.parse_if(sp),
             Some(Token::Do) => self.parse_do_while(sp),
+            Some(Token::While) => self.parse_while(sp),
             Some(Token::For) => self.parse_for(sp),
+            Some(Token::Store) => self.parse_store(sp),
+            Some(Token::Exit) => {
+                self.advance();
+                Ok(Stmt::new(StmtKind::Exit, sp..self.pos))
+            }
+            Some(Token::Loop) => {
+                self.advance();
+                Ok(Stmt::new(StmtKind::Loop, sp..self.pos))
+            }
+            Some(Token::Cls) => {
+                self.advance();
+                Ok(Stmt::new(StmtKind::Cls, sp..self.pos))
+            }
             Some(Token::Return) => self.parse_return(),
             // Agora o Parser reconhece o VIP que o Lexer enviou
             Some(Token::Question) => {
@@ -368,7 +418,9 @@ impl Parser {
     fn parse_at_stmt(&mut self, sp: usize) -> Result<Stmt, ParseError> {
         self.advance(); // consume `@`
         let row = self.parse_expr()?;
+        self.skip_newlines();
         self.expect(&Token::Comma)?;
+        self.skip_newlines();
         let col = self.parse_expr()?;
 
         match self.peek().cloned() {
@@ -572,6 +624,18 @@ impl Parser {
         ))
     }
 
+    fn parse_while(&mut self, sp: usize) -> Result<Stmt, ParseError> {
+        self.advance(); // WHILE
+        let cond = self.parse_expr()?;
+        self.expect_newline_or_semi();
+        let body = self.parse_stmts_until(&[Token::EndDo])?;
+        self.expect(&Token::EndDo)?;
+        Ok(Stmt::new(
+            StmtKind::DoWhile(DoWhileStmt { condition: cond, body }),
+            sp..self.pos,
+        ))
+    }
+
     fn parse_for(&mut self, sp: usize) -> Result<Stmt, ParseError> {
         self.advance(); // FOR
         let var = self.expect_ident()?;
@@ -593,6 +657,21 @@ impl Parser {
         self.expect(&Token::Next)?;
         Ok(Stmt::new(
             StmtKind::For(ForStmt { var, start, end, step, body }),
+            sp..self.pos,
+        ))
+    }
+
+    fn parse_store(&mut self, sp: usize) -> Result<Stmt, ParseError> {
+        self.advance(); // STORE
+        let value = self.parse_expr()?;
+        self.expect(&Token::To)?;
+        let mut vars = vec![self.expect_ident()?];
+        while matches!(self.peek(), Some(Token::Comma)) {
+            self.advance(); // Consome a vírgula
+            vars.push(self.expect_ident()?);
+        }
+        Ok(Stmt::new(
+            StmtKind::Store(StoreStmt { value, vars }),
             sp..self.pos,
         ))
     }
@@ -651,6 +730,42 @@ impl Parser {
                 };
                 Ok(Stmt::new(StmtKind::Assign(AssignStmt { target, value }), sp..self.pos))
             }
+            // Array element assignment with BracketString: a[ i ] := expr
+            Some(Token::BracketString(_)) => {
+                let s = match self.peek() {
+                    Some(Token::BracketString(s)) => s.clone(),
+                    _ => unreachable!(),
+                };
+                self.advance();
+                let s = self.balance_bracket_content(s);
+                let normalized = crate::lexer::normalize(s.trim());
+                // Split by commas to support multidimensional arrays: a[i,j] => nested Index calls
+                let indices_str: Vec<&str> = normalized.split(',').collect();
+                let mut indices = Vec::new();
+                for idx_str in indices_str {
+                    let sub_tokens: Vec<Token> = crate::lexer::tokenize(idx_str.trim())
+                        .into_iter()
+                        .filter_map(|(t, _)| t.ok())
+                        .filter(|t| !matches!(t, Token::Newline))
+                        .collect();
+                    let mut sub = Parser::new(sub_tokens);
+                    let idx = sub.parse_expr().map_err(|e| {
+                        ParseError::Other(format!("invalid array index [{}]: {}", idx_str.trim(), e))
+                    })?;
+                    indices.push(idx);
+                }
+                // Apply indices left-to-right: a[i,j] := expr => Index(Index(a, i), j) := expr
+                let mut arr = Expr::ident(&name, sp..sp + 1);
+                for idx in indices {
+                    arr = Expr {
+                        kind: ExprKind::Index(Box::new(arr), Box::new(idx)),
+                        span: sp..self.pos,
+                    };
+                }
+                self.expect(&Token::Assign)?;
+                let value = self.parse_expr()?;
+                Ok(Stmt::new(StmtKind::Assign(AssignStmt { target: arr, value }), sp..self.pos))
+            }
             // OOP field assignment: obj:field := expr
             Some(Token::Colon) => {
                 self.advance();
@@ -663,6 +778,56 @@ impl Parser {
                     span: sp..self.pos,
                 };
                 Ok(Stmt::new(StmtKind::Assign(AssignStmt { target, value }), sp..self.pos))
+            }
+            // Compound assignment: x += e  →  x := x + e  (desugar at parse time)
+            Some(Token::PlusAssign)
+            | Some(Token::MinusAssign)
+            | Some(Token::StarAssign)
+            | Some(Token::SlashAssign) => {
+                let op = match self.peek() {
+                    Some(Token::PlusAssign)  => BinOp::Add,
+                    Some(Token::MinusAssign) => BinOp::Sub,
+                    Some(Token::StarAssign)  => BinOp::Mul,
+                    Some(Token::SlashAssign) => BinOp::Div,
+                    _ => unreachable!(),
+                };
+                self.advance();
+                let rhs = self.parse_expr()?;
+                let target = Expr::ident(&name, sp..sp + 1);
+                let lhs    = Expr::ident(&name, sp..sp + 1);
+                let value  = Expr {
+                    kind: ExprKind::BinOp(op, Box::new(lhs), Box::new(rhs)),
+                    span: sp..self.pos,
+                };
+                Ok(Stmt::new(StmtKind::Assign(AssignStmt { target, value }), sp..self.pos))
+            }
+            // Post-increment: var++
+            Some(Token::Increment) => {
+                self.advance();
+                let expr = Expr::ident(&name, sp..sp + 1);
+                let expr_with_op = Expr {
+                    kind: ExprKind::UnOp(UnOp::PostIncrement, Box::new(expr)),
+                    span: sp..self.pos,
+                };
+                Ok(Stmt::new(StmtKind::Call(CallExpr { 
+                    callee: "__EXPR_STMT__".to_string(),
+                    args: vec![expr_with_op],
+                    span: sp..self.pos,
+                }), sp..self.pos))
+            }
+            // Post-decrement: var--
+            Some(Token::Decrement) => {
+                self.advance();
+                let expr = Expr::ident(&name, sp..sp + 1);
+                let expr_with_op = Expr {
+                    kind: ExprKind::UnOp(UnOp::PostDecrement, Box::new(expr)),
+                    span: sp..self.pos,
+                };
+                Ok(Stmt::new(StmtKind::Call(CallExpr { 
+                    callee: "__EXPR_STMT__".to_string(),
+                    args: vec![expr_with_op],
+                    span: sp..self.pos,
+                }), sp..self.pos))
             }
             other => Err(ParseError::Unexpected {
                 got: format!("{other:?}"),
@@ -682,7 +847,15 @@ impl Parser {
 
     fn parse_or(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_and()?;
-        while matches!(self.peek(), Some(Token::Ident(s)) if s == "OR" || s == ".OR.") {
+        loop {
+            let is_or = match self.peek() {
+                Some(Token::Or) => true,
+                Some(Token::Ident(s)) => s == "OR" || s == ".OR.",
+                _ => false,
+            };
+            if !is_or {
+                break;
+            }
             let sp = self.pos;
             self.advance();
             let right = self.parse_and()?;
@@ -696,7 +869,15 @@ impl Parser {
 
     fn parse_and(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_not()?;
-        while matches!(self.peek(), Some(Token::Ident(s)) if s == "AND" || s == ".AND.") {
+        loop {
+            let is_and = match self.peek() {
+                Some(Token::And) => true,
+                Some(Token::Ident(s)) => s == "AND" || s == ".AND.",
+                _ => false,
+            };
+            if !is_and {
+                break;
+            }
             let sp = self.pos;
             self.advance();
             let right = self.parse_not()?;
@@ -710,9 +891,13 @@ impl Parser {
 
     fn parse_not(&mut self) -> Result<Expr, ParseError> {
         let sp = self.pos;
-        if matches!(self.peek(), Some(Token::Bang))
-            || matches!(self.peek(), Some(Token::Ident(s)) if s == "NOT" || s == ".NOT.")
-        {
+        let is_not = match self.peek() {
+            Some(Token::Bang) => true,
+            Some(Token::Not) => true,
+            Some(Token::Ident(s)) => s == "NOT" || s == ".NOT.",
+            _ => false,
+        };
+        if is_not {
             self.advance();
             let expr = self.parse_not()?;
             return Ok(Expr {
@@ -790,15 +975,33 @@ impl Parser {
 
     fn parse_unary(&mut self) -> Result<Expr, ParseError> {
         let sp = self.pos;
-        if matches!(self.peek(), Some(Token::Minus)) {
-            self.advance();
-            let e = self.parse_primary()?;
-            return Ok(Expr {
-                kind: ExprKind::UnOp(UnOp::Neg, Box::new(e)),
-                span: sp..self.pos,
-            });
+        match self.peek().cloned() {
+            Some(Token::Minus) => {
+                self.advance();
+                let e = self.parse_primary()?;
+                Ok(Expr {
+                    kind: ExprKind::UnOp(UnOp::Neg, Box::new(e)),
+                    span: sp..self.pos,
+                })
+            }
+            Some(Token::Increment) => {
+                self.advance();
+                let e = self.parse_primary()?;
+                Ok(Expr {
+                    kind: ExprKind::UnOp(UnOp::PreIncrement, Box::new(e)),
+                    span: sp..self.pos,
+                })
+            }
+            Some(Token::Decrement) => {
+                self.advance();
+                let e = self.parse_primary()?;
+                Ok(Expr {
+                    kind: ExprKind::UnOp(UnOp::PreDecrement, Box::new(e)),
+                    span: sp..self.pos,
+                })
+            }
+            _ => self.parse_postfix(),
         }
-        self.parse_postfix()
     }
 
     fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
@@ -806,25 +1009,35 @@ impl Parser {
         let mut expr = self.parse_primary()?;
         loop {
             match self.peek().cloned() {
-                // array index: expr[idx]  — BracketString("idx") follows an expression.
-                // Re-normalize the content (uppercase) then sub-parse as an expression.
+                // array index: expr[idx] or expr[idx1, idx2, ...]  — BracketString("idx") follows an expression.
+                // Re-normalize the content (uppercase) then sub-parse as expression(s).
                 Some(Token::BracketString(s)) => {
                     let s = s.clone();
                     self.advance();
+                    let s = self.balance_bracket_content(s);
                     let normalized = crate::lexer::normalize(s.trim());
-                    let sub_tokens: Vec<Token> = crate::lexer::tokenize(&normalized)
-                        .into_iter()
-                        .filter_map(|(t, _)| t.ok())
-                        .filter(|t| !matches!(t, Token::Newline))
-                        .collect();
-                    let mut sub = Parser::new(sub_tokens);
-                    let idx = sub.parse_expr().map_err(|e| {
-                        ParseError::Other(format!("invalid array index [{}]: {}", s.trim(), e))
-                    })?;
-                    expr = Expr {
-                        kind: ExprKind::Index(Box::new(expr), Box::new(idx)),
-                        span: sp..self.pos,
-                    };
+                    // Split by commas to support multidimensional arrays: a[i,j,k] => nested Index calls
+                    let indices_str: Vec<&str> = normalized.split(',').collect();
+                    let mut indices = Vec::new();
+                    for idx_str in indices_str {
+                        let sub_tokens: Vec<Token> = crate::lexer::tokenize(idx_str.trim())
+                            .into_iter()
+                            .filter_map(|(t, _)| t.ok())
+                            .filter(|t| !matches!(t, Token::Newline))
+                            .collect();
+                        let mut sub = Parser::new(sub_tokens);
+                        let idx = sub.parse_expr().map_err(|e| {
+                            ParseError::Other(format!("invalid array index [{}]: {}", idx_str.trim(), e))
+                        })?;
+                        indices.push(idx);
+                    }
+                    // Apply indices left-to-right: a[i,j] => Index(Index(a, i), j)
+                    for idx in indices {
+                        expr = Expr {
+                            kind: ExprKind::Index(Box::new(expr), Box::new(idx)),
+                            span: sp..self.pos,
+                        };
+                    }
                 }
                 // Kept for error-recovery on unclosed brackets
                 Some(Token::LBracket) => {
@@ -835,6 +1048,22 @@ impl Parser {
                         kind: ExprKind::Index(Box::new(expr), Box::new(idx)),
                         span: sp..self.pos,
                     };
+                }
+                // alias/memvar operator: expr->field
+                // m->varname forces MEMVAR lookup; ALIAS->field is DBF area access.
+                Some(Token::Alias) => {
+                    self.advance();
+                    let field = self.expect_ident()?;
+                    let kind = if let ExprKind::Ident(ref alias) = expr.kind {
+                        if alias.to_ascii_uppercase() == "M" {
+                            ExprKind::Macro(field)
+                        } else {
+                            ExprKind::Field(Box::new(expr), field)
+                        }
+                    } else {
+                        ExprKind::Field(Box::new(expr), field)
+                    };
+                    expr = Expr { kind, span: sp..self.pos };
                 }
                 // field access: expr:field or method call: expr:method(...)
                 Some(Token::Colon) => {
@@ -853,6 +1082,20 @@ impl Parser {
                             span: sp..self.pos,
                         };
                     }
+                }
+                Some(Token::Increment) => {
+                    self.advance();
+                    expr = Expr {
+                        kind: ExprKind::UnOp(UnOp::PostIncrement, Box::new(expr)),
+                        span: sp..self.pos,
+                    };
+                }
+                Some(Token::Decrement) => {
+                    self.advance();
+                    expr = Expr {
+                        kind: ExprKind::UnOp(UnOp::PostDecrement, Box::new(expr)),
+                        span: sp..self.pos,
+                    };
                 }
                 _ => break,
             }
@@ -878,7 +1121,7 @@ impl Parser {
             Some(Token::IntLit(n)) => {
                 self.advance();
                 Ok(Expr::int(n, sp..self.pos))
-            }
+        }
             Some(Token::FloatLit(f)) => {
                 self.advance();
                 Ok(Expr { kind: ExprKind::Float(f), span: sp..self.pos })
@@ -946,6 +1189,7 @@ impl Parser {
 
     fn parse_call_args(&mut self, callee: String, sp: usize) -> Result<CallExpr, ParseError> {
         self.expect(&Token::LParen)?;
+        self.skip_newlines();
         let mut args = Vec::new();
         while !matches!(self.peek(), Some(Token::RParen) | None) {
             // NIL argument: bare comma → NIL
@@ -954,8 +1198,10 @@ impl Parser {
             } else {
                 args.push(self.parse_expr()?);
             }
+            self.skip_newlines();
             if matches!(self.peek(), Some(Token::Comma)) {
                 self.advance();
+                self.skip_newlines();
             } else {
                 break;
             }
@@ -966,11 +1212,17 @@ impl Parser {
 
     fn parse_iif(&mut self, sp: usize) -> Result<Expr, ParseError> {
         self.expect(&Token::LParen)?;
+        self.skip_newlines();
         let cond = self.parse_expr()?;
+        self.skip_newlines();
         self.expect(&Token::Comma)?;
+        self.skip_newlines();
         let then = self.parse_expr()?;
+        self.skip_newlines();
         self.expect(&Token::Comma)?;
+        self.skip_newlines();
         let else_ = self.parse_expr()?;
+        self.skip_newlines();
         self.expect(&Token::RParen)?;
         Ok(Expr {
             kind: ExprKind::Iif(Box::new(cond), Box::new(then), Box::new(else_)),
@@ -1068,6 +1320,140 @@ mod tests {
                 }
             }
             _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_parse_m_arrow_is_macro() {
+        // m->varName deve produzir ExprKind::Macro("VARNAME")
+        let src = "PROCEDURE Main()\n? m->nCounter\nRETURN";
+        let prog = parse(tokens(src)).unwrap();
+        match &prog.units[0] {
+            TopLevel::Procedure(p) => match &p.body[0].kind {
+                StmtKind::Print(e) => {
+                    assert!(matches!(&e.kind, ExprKind::Macro(n) if n == "NCOUNTER"));
+                }
+                _ => panic!("expected Print"),
+            },
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_parse_alias_arrow_is_field() {
+        // CUST->NAME deve produzir ExprKind::Field (DBF alias, não MEMVAR)
+        let src = "PROCEDURE Main()\n? CUST->NAME\nRETURN";
+        let prog = parse(tokens(src)).unwrap();
+        match &prog.units[0] {
+            TopLevel::Procedure(p) => match &p.body[0].kind {
+                StmtKind::Print(e) => {
+                    assert!(matches!(&e.kind, ExprKind::Field(_, f) if f == "NAME"));
+                }
+                _ => panic!("expected Print"),
+            },
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_nested_array_index_read() {
+        // aArray[aPosicao[1]] — índice interno deve ser resolvido primeiro.
+        // O lexer emite BracketString(" APOSICAO[ 1 ") + RBracket (outer ]).
+        // balance_bracket_content deve recompor " APOSICAO[ 1 ]" antes do sub-parse.
+        let src = "PROCEDURE Main()\nLOCAL aArray, aPosicao\n? aArray[aPosicao[1]]\nRETURN";
+        let prog = parse(tokens(src)).unwrap();
+        match &prog.units[0] {
+            TopLevel::Procedure(p) => match &p.body[1].kind {
+                StmtKind::Print(e) => {
+                    // Deve ser Index(Ident(AARRAY), Index(Ident(APOSICAO), Integer(1)))
+                    match &e.kind {
+                        ExprKind::Index(outer_arr, inner_idx) => {
+                            assert!(matches!(&outer_arr.kind, ExprKind::Ident(n) if n == "AARRAY"));
+                            assert!(matches!(&inner_idx.kind,
+                                ExprKind::Index(arr, idx)
+                                if matches!(&arr.kind, ExprKind::Ident(n) if n == "APOSICAO")
+                                && matches!(&idx.kind, ExprKind::Integer(1))
+                            ));
+                        }
+                        other => panic!("expected nested Index, got {:?}", other),
+                    }
+                }
+                _ => panic!("expected Print"),
+            },
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_nested_array_index_assign() {
+        // aArray[aPosicao[1]] := val — lado esquerdo de atribuição com índice aninhado.
+        let src = "PROCEDURE Main()\nLOCAL aArray, aPosicao\naArray[aPosicao[1]] := 42\nRETURN";
+        let prog = parse(tokens(src)).unwrap();
+        match &prog.units[0] {
+            TopLevel::Procedure(p) => match &p.body[1].kind {
+                StmtKind::Assign(a) => {
+                    match &a.target.kind {
+                        ExprKind::Index(outer_arr, inner_idx) => {
+                            assert!(matches!(&outer_arr.kind, ExprKind::Ident(n) if n == "AARRAY"));
+                            assert!(matches!(&inner_idx.kind,
+                                ExprKind::Index(arr, idx)
+                                if matches!(&arr.kind, ExprKind::Ident(n) if n == "APOSICAO")
+                                && matches!(&idx.kind, ExprKind::Integer(1))
+                            ));
+                        }
+                        other => panic!("expected nested Index on lhs, got {:?}", other),
+                    }
+                }
+                _ => panic!("expected Assign"),
+            },
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_compound_assign_desugars_to_binop() {
+        // nVar += 5  →  Assign(nVar, BinOp(Add, nVar, 5))
+        let src = "PROCEDURE Main()\nLOCAL nVar := 0\nnVar += 5\nRETURN";
+        let prog = parse(tokens(src)).unwrap();
+        match &prog.units[0] {
+            TopLevel::Procedure(p) => match &p.body[1].kind {
+                StmtKind::Assign(a) => {
+                    assert!(matches!(&a.target.kind, ExprKind::Ident(n) if n == "NVAR"));
+                    assert!(matches!(&a.value.kind,
+                        ExprKind::BinOp(BinOp::Add, lhs, rhs)
+                        if matches!(&lhs.kind, ExprKind::Ident(n) if n == "NVAR")
+                        && matches!(&rhs.kind, ExprKind::Integer(5))
+                    ));
+                }
+                _ => panic!("expected Assign"),
+            },
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_compound_assign_all_ops() {
+        // Cobre os 4 operadores; verifica apenas o BinOp gerado.
+        let cases = [
+            ("nVar -= 3", BinOp::Sub),
+            ("nVar *= 2", BinOp::Mul),
+            ("nVar /= 4", BinOp::Div),
+        ];
+        for (stmt, expected_op) in &cases {
+            let src = format!("PROCEDURE Main()\nLOCAL nVar := 0\n{stmt}\nRETURN");
+            let prog = parse(tokens(&src)).unwrap();
+            match &prog.units[0] {
+                TopLevel::Procedure(p) => match &p.body[1].kind {
+                    StmtKind::Assign(a) => {
+                        assert!(
+                            matches!(&a.value.kind, ExprKind::BinOp(op, _, _) if op == expected_op),
+                            "{stmt}: expected BinOp {:?}", expected_op
+                        );
+                    }
+                    _ => panic!("{stmt}: expected Assign"),
+                },
+                _ => panic!(),
+            }
         }
     }
 }

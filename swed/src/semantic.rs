@@ -191,6 +191,27 @@ impl<'a> Analyzer<'a> {
                     self.analyze_expr(&a.target, env);
                 }
             }
+            StmtKind::Store(s) => {
+                self.analyze_expr(&s.value, env);
+                for var in &s.vars {
+                    if env.resolve(var).is_none() {
+                        self.warn(
+                            format!(
+                                "Variable `{var}` in STORE assignment without declaration; \
+                                 auto-creating as PRIVATE (Harbour runtime behaviour)"
+                            ),
+                            stmt.span.clone(),
+                        );
+                        env.declare_private(var, HbType::Unknown);
+                    }
+                }
+            }
+            StmtKind::Exit | StmtKind::Loop => {
+                // EXIT e LOOP apenas têm efeito dentro de loops; validação pode ser adicionada
+            }
+            StmtKind::Cls => {
+                // CLS não tem dependências semânticas
+            }
             StmtKind::Call(c) => self.analyze_call(c, env),
             StmtKind::Print(e) => self.analyze_expr(e, env),
             StmtKind::If(i) => {

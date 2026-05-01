@@ -76,6 +76,43 @@ pub fn public_store() -> &'static RwLock<PublicVars> {
 }
 
 // ---------------------------------------------------------------------------
+// Codegen API — funções livres emitidas pelo transpilador
+// ---------------------------------------------------------------------------
+//
+// O Codegen emite `use swed_rt::{pub_declare, pub_get, pub_set, memvar_assign, memvar_get};`
+// e chama essas funções diretamente no código gerado. Todas usam o mesmo STORE singleton.
+//
+// PUBLIC e MEMVAR/PRIVATE têm escopos diferentes em Harbour, mas no código transpilado
+// (onde não existe scoping dinâmico) ambos mapeiam para o mesmo HashMap global.
+
+/// `PUBLIC name` — declara variável PUBLIC com valor inicial.
+/// Sobrescreve se já existir (comportamento Harbour para re-declaração).
+pub fn pub_declare(name: &str, init: HbValue) {
+    public_store().write().unwrap().set(name, init);
+}
+
+/// Lê uma variável PUBLIC. Retorna `Nil` se não declarada.
+pub fn pub_get(name: &str) -> HbValue {
+    public_store().read().unwrap().get(name)
+}
+
+/// Escreve uma variável PUBLIC (atribuição).
+pub fn pub_set(name: &str, val: HbValue) {
+    public_store().write().unwrap().set(name, val);
+}
+
+/// `MEMVAR name` ou `m->name := val` — declara ou sobrescreve uma MEMVAR/PRIVATE.
+pub fn memvar_assign(name: &str, val: HbValue) {
+    public_store().write().unwrap().set(name, val);
+}
+
+/// Lê uma MEMVAR/PRIVATE, incluindo acesso via `m->name`.
+/// Retorna `Nil` se não declarada.
+pub fn memvar_get(name: &str) -> HbValue {
+    public_store().read().unwrap().get(name)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -164,5 +201,74 @@ mod tests {
         public_store().write().unwrap().set("P_VAR", HbValue::Nil);
         assert!(public_store().read().unwrap().contains("P_VAR"));
         assert_eq!(public_store().read().unwrap().get("P_VAR"), HbValue::Nil);
+    }
+
+    // ── Codegen API ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_pub_declare_cria_variavel() {
+        fresh();
+        pub_declare("NEMPRESA", HbValue::Nil);
+        assert!(public_store().read().unwrap().contains("NEMPRESA"));
+        assert_eq!(pub_get("NEMPRESA"), HbValue::Nil);
+    }
+
+    #[test]
+    fn test_pub_declare_sobrescreve_existente() {
+        fresh();
+        pub_declare("NEMPRESA", HbValue::Integer(1));
+        pub_declare("NEMPRESA", HbValue::Integer(99));
+        assert_eq!(pub_get("NEMPRESA"), HbValue::Integer(99));
+    }
+
+    #[test]
+    fn test_pub_set_e_pub_get_round_trip() {
+        fresh();
+        pub_declare("CUSUARIO", HbValue::Nil);
+        pub_set("CUSUARIO", HbValue::String("ADMIN".into()));
+        assert_eq!(pub_get("CUSUARIO"), HbValue::String("ADMIN".into()));
+    }
+
+    #[test]
+    fn test_pub_get_ausente_retorna_nil() {
+        fresh();
+        assert_eq!(pub_get("INEXISTENTE"), HbValue::Nil);
+    }
+
+    #[test]
+    fn test_memvar_assign_declara_e_sobrescreve() {
+        fresh();
+        memvar_assign("CNAME", HbValue::Nil);
+        assert_eq!(memvar_get("CNAME"), HbValue::Nil);
+        memvar_assign("CNAME", HbValue::String("Alice".into()));
+        assert_eq!(memvar_get("CNAME"), HbValue::String("Alice".into()));
+    }
+
+    #[test]
+    fn test_memvar_get_ausente_retorna_nil() {
+        fresh();
+        assert_eq!(memvar_get("NINEXISTENTE"), HbValue::Nil);
+    }
+
+    #[test]
+    fn test_m_arrow_semantics_via_memvar_get() {
+        // m->nCounter em Harbour → memvar_get("NCOUNTER") no código gerado.
+        // Deve retornar o valor armazenado independente do escopo LOCAL.
+        fresh();
+        memvar_assign("NCOUNTER", HbValue::Integer(42));
+        assert_eq!(memvar_get("NCOUNTER"), HbValue::Integer(42));
+    }
+
+    #[test]
+    fn test_pub_e_memvar_compartilham_store() {
+        // PUBLIC e MEMVAR usam o mesmo armazém — nomes distintos não colidem.
+        fresh();
+        pub_declare("NPUB", HbValue::Integer(1));
+        memvar_assign("NMEM", HbValue::Integer(2));
+        assert_eq!(pub_get("NPUB"), HbValue::Integer(1));
+        assert_eq!(memvar_get("NMEM"), HbValue::Integer(2));
+        // Mesmo nome sobrescreve (armazém único)
+        pub_set("NMEM", HbValue::Integer(99));
+        assert_eq!(memvar_get("NMEM"), HbValue::Integer(99));
     }
 }

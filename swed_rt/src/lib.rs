@@ -17,7 +17,11 @@ pub use unwrap::{
 };
 
 // ── PUBLIC / MEMVAR variable store ───────────────────────────────────────────
-pub use publics_var::{public_store, PublicVars};
+pub use publics_var::{
+    public_store, PublicVars,
+    pub_declare, pub_get, pub_set,
+    memvar_assign, memvar_get,
+};
 
 // ── Built-in functions ────────────────────────────────────────────────────────
 pub use builtins::{
