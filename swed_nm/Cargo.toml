@@ -1,0 +1,15 @@
+[package]
+name         = "swed_nm"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+description  = "Shipwrecked Semantic Normalizer — AST rewrite pass between Semantic and Codegen"
+
+[dependencies]
+swed_co = { workspace = true }
+
+[lints]
+workspace = true
