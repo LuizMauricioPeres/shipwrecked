@@ -15,7 +15,9 @@ fn extract_defines(src: &str) -> (HashMap<String, String>, String) {
         let trimmed = line.trim_start();
         // Harbour `*` comment: valid only when `*` is the first non-space char on the line.
         // Strip here so the lexer never sees `*` as a comment-start mid-expression.
-        if trimmed.starts_with('*') {
+        // Exception: `*/` is the closing delimiter of a C-style block comment — must be kept
+        // so the logos regex can match and discard the full `/* ... */` span correctly.
+        if trimmed.starts_with('*') && !trimmed.starts_with("*/") {
             code_lines.push("");
             continue;
         }
