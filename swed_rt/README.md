@@ -30,7 +30,16 @@ let v = public_store().read().unwrap().get("N_EMPRESA");
 
 ## Built-in functions
 
-`builtins.rs` implements the most-used Harbour functions: `Date`, `Left`, `Right`, `AllTrim`, `Len`, `Str`, `Val`, `Type`, `Empty`, `AAdd`, `ALen`, `AScan`, `AEval`, and more. These will migrate to `swed_bf` as that crate matures.
+`builtins.rs` implements the most-used Harbour functions: `Date`, `Left`, `Right`, `AllTrim`, `Len`, `Str`, `Val`, `Type`, `Empty`, `AAdd`, `ASize`, `AScan`, and more. These will migrate to `swed_bf` as that crate matures.
+
+### Pending additions (blocking generated code)
+
+| Function | Signature | Fixes |
+|----------|-----------|-------|
+| `hb_array(n)` | `(n: HbValue) -> HbValue` | E0425 — `Array(n)` in generated code |
+| `hb_set_val(idx, val)` | `(&mut HbValue, HbValue, HbValue)` | E0070 — `a[i] := v` pattern |
+| `hb_set_nested(i, j, val)` | `(&mut HbValue, HbValue, HbValue, HbValue)` | E0070 — `a[i][j] := v` |
+| non-generic `hb_get_val` | accept `HbValue` directly | E0282 — type inference failure |
 
 ## Dependency note
 

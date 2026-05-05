@@ -43,11 +43,50 @@ The `FunctionResolver` looks up functions by name against this registry. This re
 ```
 swed_bf/src/
 ├── lib.rs          ← registry: name → Box<dyn NativeFunction>
-├── string.rs       ← Left, Right, SubStr, AllTrim, Upper, Lower, At, PadL, PadR
-├── numeric.rs      ← Str, Val
-├── date.rs         ← Date, DToS, SToD, Year, Month, Day
-├── array.rs        ← AAdd, ALen, AScan, AEval, ASort
-├── misc.rs         ← Type, Empty, Len
+├── string.rs       ← Left, Right, SubStr, AllTrim, Upper, Lower, At, PadL, PadR, StrTran, HardCR
+├── numeric.rs      ← Str, Val, Mod, Sqrt, Exp, Log, Word
+├── date.rs         ← Date, DToS, SToD, Year, Month, Day, DToC, CToD, CMonth, CDoW, DoW, Time, Seconds
+├── array.rs        ← AAdd, ASize, AScan, ATail, ADel, AIns, AFill, AClone, ACopy, AEval, ASort
+├── misc.rs         ← Type, Empty, Len, IsAlpha, IsDigit, IsLower, IsUpper, Eval, OS, Version
 └── traits/
     └── mod.rs      ← re-export NativeFunction from swed_co
 ```
+
+## Pending functions (by priority)
+
+Functions listed in `hbdocs.json` not yet implemented (343 entries surveyed, ~30 relevant to non-DB use):
+
+### P1 — Blocking resta1.rs compilation
+
+| Harbour | swed_bf fn | Notes |
+|---------|-----------|-------|
+| `Array(n)` | `hb_array` | creates HbArray of n Nil elements |
+| `SetColor([cSpec])` | `hb_setcolor` | ANSI stub or delegates to swed_ui |
+
+### P2 — String
+
+| Harbour | swed_bf fn |
+|---------|-----------|
+| `Left(s, n)` | `hb_left` |
+| `Right(s, n)` | `hb_right` |
+| `StrTran(s, old, new)` | `hb_strtran` |
+| `HardCR(s)` | `hb_hardcr` |
+| `hb_ValToStr(v)` | `hb_valtostr` |
+| `Transform(val, pic)` | `hb_transform` |
+
+### P3 — Array
+
+| Harbour | swed_bf fn |
+|---------|-----------|
+| `ATail(a)` | `hb_atail` |
+| `ADel(a, n)` | `hb_adel` |
+| `AIns(a, n)` | `hb_ains` |
+| `AFill(a, v, s, c)` | `hb_afill` |
+| `AClone(a)` | `hb_aclone` |
+| `ACopy(s,d,s,c,ds)` | `hb_acopy` |
+| `AEval(a, block)` | `hb_aeval` |
+| `ASort(a, block)` | `hb_asort` |
+
+### P4 — Numeric / P5 — Date / P6 — Type checking / P7 — System
+
+See `README_IA.md` for complete list.

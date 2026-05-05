@@ -22,14 +22,20 @@
 └─────────────┘
     │
     ▼
-┌─────────────┐     hbdocs.json
+┌─────────────┐     hbdocs.json (343 entries)
 │  Semantic   │  ──────────────►  Diagnostics
 │  Analyzer   │
 └─────────────┘
     │
     ▼
-┌─────────────┐     (planned)
-│  swed_nm    │  AST rewrite pass — desambiguates operators, expands ++/--, detects native calls
+┌─────────────┐     (planned — swed_nm crate)
+│  swed_nm    │  AST rewrite pass:
+│  Normalizer │    • BuiltinNameResolver  — chr/array/setcolor → hb_chr/hb_array/hb_setcolor
+│             │    • IndexAssignNorm      — a[i] := v → hb_set_val(i, v)        fixes E0070
+│             │    • ChainedIndexAssign   — a[i][j] := v → hb_set_nested(i,j,v) fixes E0070
+│             │    • IndexTypeAnnotation  — inject :HbValue to fix E0282
+│             │    • IncrDecrNorm         — x++ / x-- in rvalue context
+│             │    • BuiltinImportInject  — generate use swed_bf::{...} in _module.rs
 └─────────────┘
     │
     ▼
@@ -38,7 +44,7 @@
 └─────────────┘
     │
     ▼
- <name>.rs  +  <name>_module.rs   (planned dual-file output)
+ <name>.rs  +  <name>_module.rs   (dual-file output — in progress)
 ```
 
 ## Workspace layout
@@ -46,7 +52,7 @@
 ```
 shipwrecked/
 ├── Cargo.toml       ← workspace root
-├── hbdocs.json      ← Harbour built-in function signatures
+├── hbdocs.json      ← Harbour built-in function signatures (343 entries)
 ├── examples/
 │
 ├── swed/            ← transpiler binary (Lexer → Parser → Semantic → Codegen)
@@ -55,6 +61,7 @@ shipwrecked/
 │
 ├── swed_co/         ← core types and traits (HbType, SwedError, NativeFunction, …)
 ├── swed_bf/         ← Harbour built-in function implementations (Str, Date, Pad*, Chr, …)
+├── swed_nm/         ← [PLANNED] Semantic Normalizer — AST rewrite pass before codegen
 ├── swed_db/         ← database / RDD layer (WorkArea, DbfHandler, Row, field_get/set)
 ├── swed_io/         ← file I/O + encoding (CP1252 → UTF-8 via encoding_rs)
 ├── swed_kn/         ← knife tools: ErrorInterceptor, hex dump, patch suggestions (stub)
@@ -88,7 +95,11 @@ swed      (binary — links swed_rt + swed_mkh + swed_db + swed_ui for the full 
 | `PUBLIC nEmp` | `public_store().write().unwrap().set("N_EMP", HbValue::Nil)` |
 | `AAdd(a, v)` | `a.hb_aadd(v)` |
 | `LEN(x)` | `x.hb_len_as_i64()` |
-| `a[i]` | `a[&HbValue::Integer(i)]` |
+| `a[i]` (read) | `a.hb_get_val(HbValue::Integer(i))` |
+| `a[i] := v` (write) | `a.hb_set_val(HbValue::Integer(i), v)` |
+| `a[i][j] := v` | `a.hb_set_nested(i, j, v)` |
+| `Chr(n)` | `hb_chr(n)` ← via swed_nm BuiltinNameResolver |
+| `Array(n)` | `hb_array(n)` |
 | `FOR i := 1 TO n` | `for i in hb_range(1, n, 1)` |
 | `DO WHILE cond` | `while cond { ... }` |
 | `IF / ELSEIF / ELSE` | `if / else if / else` |
@@ -171,7 +182,32 @@ Add a new entry to register a custom function for arity validation:
 
 ### Planned
 
-- [ ] `swed_nm` — Semantic Normalizer: AST rewrite pass between Semantic and Codegen (desambiguate `=`, rewrite `++`/`--`, detect native calls for `_module.rs`)
+#### swed_nm — Semantic Normalizer (create crate)
+
+AST rewrite pass between Semantic and Codegen. Priorities derived from resta1.rs errors:
+
+| Rule | Input | Output | Fixes |
+|------|-------|--------|-------|
+| `BuiltinNameResolver` | `chr(n)` `array(n)` `setcolor()` | `hb_chr(n)` `hb_array(n)` `hb_setcolor()` | E0425 |
+| `IndexAssignNorm` | `x.hb_get_val(i) = v` | `x.hb_set_val(i, v)` | E0070 |
+| `ChainedIndexAssignNorm` | `x.hb_get_val(i).hb_get_val(j) = v` | `x.hb_set_nested(i, j, v)` | E0070 (12+ sites) |
+| `IndexTypeAnnotation` | ambiguous `hb_get_val(x)` | `hb_get_val(x as HbValue)` | E0282 |
+| `IncrDecrNorm` | `x++` / `x--` in rvalue | `{ let old = x.clone(); x += 1; old }` | operator crimes |
+| `BuiltinImportInjector` | used built-ins in AST | `use swed_bf::{hb_chr, …}` in `_module.rs` | E0425 |
+| `AliasResolver` | `Trim` `Type` | `hb_rtrim` `hb_valtype` | name mismatch |
+| `TuiCallDetector` | calls to screen functions | marks PRG as `requires: swed_ui` | dependency inference |
+
+#### swed_bf — Pending functions (from hbdocs.json survey)
+
+- **P2 String:** `hb_left`, `hb_right`, `hb_strtran`, `hb_hardcr`, `hb_valtostr`, `hb_transform`
+- **P3 Array:** `hb_atail`, `hb_adel`, `hb_ains`, `hb_afill`, `hb_aclone`, `hb_acopy`, `hb_aeval`, `hb_asort`
+- **P4 Numeric:** `hb_mod`, `hb_sqrt`, `hb_exp`, `hb_log`, `hb_word`
+- **P5 Date/Time:** `hb_dtoc`, `hb_ctod`, `hb_cmonth`, `hb_cdow`, `hb_dow`, `hb_time`, `hb_seconds`, `hb_secs`, `hb_elaptime`
+- **P6 Type:** `hb_isalpha`, `hb_isdigit`, `hb_islower`, `hb_isupper`, `hb_isaffirm`, `hb_isnegative`, `hb_eval`, `hb_pcount`
+- **P7 System:** `hb_os`, `hb_version`, `hb_curdir`
+
+#### Other
+
 - [ ] `impl Into<HbValue>` on `swed_bf` function signatures — allows generated code to pass literals without `.into()`
 - [ ] VS Code Extension — SWed as LSP pre-compiler (Go-to-Definition via `.mkh`)
 - [ ] Full OOP: `CLASS` / `METHOD` / inheritance via traits

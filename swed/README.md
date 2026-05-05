@@ -14,8 +14,16 @@ Source-to-source transpiler binary: Harbour / xBase `.prg` → idiomatic Rust. T
     │
     ▼
 ┌──────────┐
-│  Parser  │  recursive descent  ►  ast::Program
+│  Parser  │  recursive descent  ►  ast::Program  (types from swed_co)
 └──────────┘
+    │
+    ▼
+┌──────────────────┐
+│  swed_nm         │  AST rewrite (in-place &mut Program):
+│  ::normalize()   │    1. BuiltinNameResolver — CHR→HB_CHR, MAX→HB_MAX, …
+│                  │    2. IndexAssignNorm     — a[i]:=v → hb_set_val(a,i,v)
+│                  │    3. IncrDecrNorm        — x++/x-- (stub)
+└──────────────────┘
     │
     ▼
 ┌────────────────┐  hbdocs.json
@@ -37,7 +45,7 @@ Source-to-source transpiler binary: Harbour / xBase `.prg` → idiomatic Rust. T
 ```
 swed/src/
 ├── main.rs         ← CLI entry point; reads .prg + hbdocs.json, writes .rs
-├── ast.rs          ← AST node definitions
+├── ast.rs          ← thin re-export: `pub use swed_co::ast::*`
 ├── lexer.rs        ← Token definitions (logos derive)
 ├── parser.rs       ← Recursive-descent parser
 ├── scope.rs        ← Variable scope resolution (LOCAL > STATIC > PRIVATE > PUBLIC)
@@ -70,6 +78,9 @@ cargo test --workspace
 | `FOR i := 1 TO n` | `for i in hb_range(1, n, 1)` |
 | `DO WHILE cond` | `while cond { ... }` |
 | `AAdd(a, v)` | `a.hb_aadd(v)` |
+| `a[i] := v` | `a.hb_set_val(i, v)` ← via `swed_nm::IndexAssignNorm` |
+| `a[i][j] := v` | `a.hb_set_nested(i, j, v)` ← via `swed_nm` |
+| `Chr(219)` | `hb_chr(...)` ← via `swed_nm::BuiltinNameResolver` |
 | `? expr` | `println!("{}", expr)` |
 | `NIL` | `HbValue::Nil` |
 | `.T.` / `.F.` | `HbValue::Logical(true/false)` |
