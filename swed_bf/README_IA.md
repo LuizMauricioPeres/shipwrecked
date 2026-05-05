@@ -1,120 +1,108 @@
 CRATE: swed_bf v0.2.0
 TYPE: library (lib)
-ROLE: Harbour built-in function implementations backed by HbValue; NativeFunction registry
-STATUS: string/numeric/date/misc implemented; array functions pending; registry wired
+ROLE: Harbour built-in functions backed by HbValue; NativeFunction registry (56 entries)
+STATUS: P0-P4 complete; array/math/string/date/misc implemented; 177 tests passing
 
 DEPS:
-  swed_co — NativeFunction, FunctionResolver traits
-  swed_rt — HbValue
+  swed_co — NativeFunction trait
+  swed_rt — HbValue, HbArray
 
-DESIGN: Each Harbour function = standalone fn + struct implementing NativeFunction.
-        lib.rs BfRegistry implements FunctionResolver: name → &dyn NativeFunction.
-        All functions return HbValue; propagate Nil on type mismatch (no panics).
+DESIGN:
+  Each Harbour fn = free fn + struct implementing NativeFunction<HbValue>.
+  all_functions() -> Vec<(&'static str, Box<dyn NativeFunction<HbValue>>)>
+  All return HbValue; Nil on type mismatch (no panics, no Result).
+  Premissa: novas funções Harbour vão aqui, não em swed_rt.
 
 SOURCE_FILES:
-  lib.rs        — BfRegistry struct; impl FunctionResolver; register_all() constructor
-  string.rs     — string operations
-  numeric.rs    — numeric formatting and conversion
-  date.rs       — date creation and decomposition
-  misc.rs       — type inspection and array length
-  traits/mod.rs — re-export NativeFunction from swed_co
+  lib.rs      — all_functions() registry
+  array.rs    — Array + AAdd ASize AFill AScan ATail ADel AIns AClone
+  date.rs     — Date Year Month Day DToS SToD
+  math.rs     — Abs Int Round Max Min Mod Sqrt Exp Log
+  misc.rs     — Type ValType Empty PCount
+  numeric.rs  — Str StrZero NToS Chr
+  string.rs   — AllTrim LTrim RTrim Trim Upper Lower Left Right SubStr At Asc Len Val PadL PadR PadC Space Replicate
 
 FUNCTIONS:
 
-string.rs:
-  hb_left(s:HbValue, n:HbValue) -> HbValue::String       — Left(cStr, n)
-  hb_right(s, n)                -> HbValue::String       — Right(cStr, n)
-  hb_substr(s, start, len)      -> HbValue::String       — SubStr(cStr, n, len); len optional
-  hb_alltrim(s)                 -> HbValue::String       — AllTrim(cStr)
-  hb_upper(s)                   -> HbValue::String       — Upper(cStr)
-  hb_lower(s)                   -> HbValue::String       — Lower(cStr)
-  hb_at(needle, haystack)       -> HbValue::Integer      — At(sub,str); 1-based; 0=not found
-  hb_padl(s, n)                 -> HbValue::String       — PadL(c,n)
-  hb_padr(s, n)                 -> HbValue::String       — PadR(c,n)
-
-numeric.rs:
-  hb_str(n, width, dec)         -> HbValue::String       — Str(n[,width[,dec]])
-  hb_val(s)                     -> HbValue::Float        — Val(cStr)
-  hb_strzero(n, len, dec)       -> HbValue::String       — StrZero(n,len[,dec])
-  hb_ntos(n)                    -> HbValue::String       — NToS(n) — no trailing zeros
+array.rs:
+  hb_array_new(n:HbValue) -> HbValue::Array        — Array(n); NIL-filled; negative→Nil
+  hb_aadd(arr, val)       -> val                   — AAdd; returns element (registry: copy semantics)
+  hb_asize(arr, n)        -> HbValue::Array        — ASize; grow→Nil fill; shrink→truncate
+  hb_afill(arr,v,s?,c?)   -> HbValue::Array        — AFill; s,c 1-based optional
+  hb_ascan(arr,v,s?,c?)   -> HbValue::Integer      — AScan; 1-based index or 0; s,c optional
+  hb_atail(arr)           -> HbValue              — ATail; last element; empty→Nil
+  hb_adel(arr, n)         -> HbValue::Array        — ADel; shift left; last→Nil; size preserved
+  hb_ains(arr, n)         -> HbValue::Array        — AIns; insert Nil at n; drop last
+  hb_aclone(arr)          -> HbValue::Array        — AClone; deep copy via Clone
 
 date.rs:
-  hb_date()                     -> HbValue::Date         — Date() — today
-  hb_dtos(d)                    -> HbValue::String       — DToS(dDate) → "YYYYMMDD"
-  hb_stod(s)                    -> HbValue::Date         — SToD(cStr) ← "YYYYMMDD"
-  hb_year(d)                    -> HbValue::Integer      — Year(dDate)
-  hb_month(d)                   -> HbValue::Integer      — Month(dDate)
-  hb_day(d)                     -> HbValue::Integer      — Day(dDate)
+  hb_date()               -> HbValue::Date         — today (days since 1970-01-01)
+  hb_year(d)              -> HbValue::Integer      — Year(dDate)
+  hb_month(d)             -> HbValue::Integer      — Month(dDate)
+  hb_day(d)               -> HbValue::Integer      — Day(dDate)
+  hb_dtos(d)              -> HbValue::String       — DToS → "YYYYMMDD"
+  hb_stod(s)              -> HbValue::Date         — SToD ← "YYYYMMDD"; bad→Nil
+
+math.rs:
+  hb_abs(n)               -> HbValue              — Abs; preserves Integer/Float
+  hb_int(n)               -> HbValue::Integer      — Int; trunc toward zero
+  hb_round(n, dec)        -> HbValue              — Round; dec≤0→Integer, dec>0→Float
+  hb_max(a, b)            -> HbValue              — Max; PartialOrd; works on Date
+  hb_min(a, b)            -> HbValue              — Min
+  hb_mod(a, b)            -> HbValue              — Mod; sign of a; b=0→Nil
+  hb_sqrt(n)              -> HbValue::Float        — Sqrt; negative→Nil
+  hb_exp(n)               -> HbValue::Float        — Exp; e^n
+  hb_log(n)               -> HbValue::Float        — Log; natural log; n≤0→Nil
 
 misc.rs:
-  hb_type(v)                    -> HbValue::String       — Type(x) → "N"/"C"/"L"/"D"/"A"/"U"
-  hb_empty(v)                   -> HbValue::Logical      — Empty(x)
-  hb_len(v)                     -> HbValue::Integer      — Len(x) for String or Array
+  hb_type(v)              -> HbValue::String       — Type/ValType → "C"/"N"/"L"/"D"/"A"/"U"
+  hb_empty(v)             -> HbValue::Logical      — Empty; Nil/0/""/ []/F./Date(0)→T.
+  hb_pcount()             -> HbValue::Integer(0)   — PCount stub; real count needs context
 
-NATIVE_FUNCTION_IMPL_PATTERN:
-  struct HbLeft;
-  impl NativeFunction for HbLeft {
-      fn name(&self) -> &'static str { "LEFT" }
-      fn arity(&self) -> (usize,usize) { (2,2) }
-      fn call(&self, args: Vec<HbValue>) -> HbValue { hb_left(args[0].clone(), args[1].clone()) }
-  }
+numeric.rs:
+  hb_str(n, w?, d?)       -> HbValue::String       — Str; right-justified; overflow→"***"
+  hb_strzero(n, w, d?)    -> HbValue::String       — StrZero; zero-padded
+  hb_ntos(n)              -> HbValue::String       — hb_NToS; compact; no pad
+  hb_chr(n)               -> HbValue::String       — Chr; ASCII 0-255; else ""
 
-REGISTRY (lib.rs):
-  BfRegistry::new() — registers all functions
-  impl FunctionResolver for BfRegistry
-  Used by: swed binary (arity validation), swed_rt (dispatch)
+string.rs:
+  hb_alltrim(s)           -> HbValue::String       — AllTrim; both sides
+  hb_ltrim(s)             -> HbValue::String       — LTrim; leading
+  hb_rtrim(s)             -> HbValue::String       — RTrim/Trim; trailing
+  hb_upper(s)             -> HbValue::String       — Upper
+  hb_lower(s)             -> HbValue::String       — Lower
+  hb_left(s, n)           -> HbValue::String       — Left; n>Len→full string
+  hb_right(s, n)          -> HbValue::String       — Right
+  hb_substr(s, start, n?) -> HbValue::String       — SubStr; 1-based; n=Nil→to end
+  hb_at(needle, hay)      -> HbValue::Integer      — At; 1-based pos or 0
+  hb_asc(s)               -> HbValue::Integer      — Asc; first byte ASCII; ""→0
+  hb_len(v)               -> HbValue::Integer      — Len; bytes(str) or elements(arr)
+  hb_val(s)               -> HbValue              — Val; int→Integer float→Float else 0
+  hb_padl(s, n, pad?)     -> HbValue::String       — PadL; truncates right if oversized
+  hb_padr(s, n, pad?)     -> HbValue::String       — PadR; truncates left if oversized
+  hb_padc(s, n, pad?)     -> HbValue::String       — PadC; left-heavy on odd delta
+  hb_space(n)             -> HbValue::String       — Space; n spaces
+  hb_replicate(s, n)      -> HbValue::String       — Replicate; repeat n times
+
+REGISTRY_STRUCTS (one per fn, same name PascalCase):
+  Array AAdd ASize AFill AScan ATail ADel AIns AClone
+  Date Year Month Day DToS SToD
+  Abs Int Round Max Min Mod Sqrt Exp Log
+  Type ValType Empty PCount
+  Str StrZero NToS Chr
+  AllTrim LTrim RTrim Trim Upper Lower Left Right SubStr At Asc Len Val
+  PadL PadR PadC Space Replicate
 
 NIL_SEMANTICS:
-  All functions receiving wrong type → return HbValue::Nil (no panic, no Result)
-  Matches Harbour runtime behaviour on type errors
+  All functions: wrong type → HbValue::Nil (no panic, no Result)
+  Exception: hb_int(Nil) → Integer(0); hb_val(Nil) → Integer(0) (Harbour compat)
 
-PENDING (this crate — ordered by priority):
+MUTATION_NOTE:
+  AAdd/ADel/AIns/AFill in registry operate on copies (Vec<HbValue> by value).
+  Generated code uses HbValue::hb_aadd / hb_set_val / hb_set_nested directly.
 
-  P1 — Bloqueadores resta1.rs:
-    hb_array(n:HbValue) -> HbValue            — Array(n); cria HbArray de n Nil (pode ir em swed_rt)
-    hb_setcolor(spec:HbValue) -> HbValue      — SetColor(); stub ANSI ou delega a swed_ui
-    hb_set_val / hb_set_nested                — corrigem E0070; vivem em swed_rt::HbArray
-
-  P2 — String:
-    hb_left(s, n)                             — Left(cStr, n)
-    hb_right(s, n)                            — Right(cStr, n)
-    hb_strtran(s, from, to)                   — StrTran(s, old, new)
-    hb_hardcr(s)                              — HardCR(s) — soft \n → hard CR
-    hb_valtostr(v)                            — hb_ValToStr(v) — equivale a Display
-    hb_transform(val, pic)                    — Transform(val, picture) — complexo; stub OK
-
-  P3 — Array (array.rs):
-    hb_atail(a)                               — ATail(a) — último elemento
-    hb_adel(a, n)                             — ADel(a, n) — remove e compacta
-    hb_ains(a, n)                             — AIns(a, n) — insere Nil na posição
-    hb_afill(a, val, start, count)            — AFill(a, v, s, c)
-    hb_aclone(a)                              — AClone(a) — deep clone
-    hb_acopy(src, dst, start, count, dstart)  — ACopy(...)
-    hb_aeval(a, block)                        — AEval(a, {|x| ...})
-    hb_asort(a, block)                        — ASort(a, block) — closure comparator
-
-  P4 — Numérico:
-    hb_mod(a, b)    hb_sqrt(n)    hb_exp(n)    hb_log(n)
-    hb_word(n)      hb_i2bin / hb_bin2i / hb_l2bin / hb_bin2l
-
-  P5 — Data/Hora:
-    hb_dtoc(d)      hb_ctod(s)    hb_cmonth(d)  hb_cdow(d)   hb_dow(d)
-    hb_time()       hb_seconds()  hb_secs(t)    hb_elaptime(t1,t2)  hb_days(n)
-
-  P6 — Tipo/Validação:
-    hb_isalpha / hb_isdigit / hb_islower / hb_isupper
-    hb_isaffirm / hb_isnegative
-    hb_eval(block, args)          — Eval(bBlock, arg1, ...)
-    hb_pcount()                   — PCount() — sempre 0 em contexto Rust
-
-  P7 — Sistema (stub OK):
-    hb_os()    hb_version()    hb_curdir()
-
-  MIGRATION:
-    hb_chr / hb_asc / hb_space / hb_replicate — já em swed_rt; migrar para cá gradualmente
-    impl Into<HbValue> on fn params            — callers passam literais sem .into()
-
-INTEGRATES_WITH:
-  swed_rt: imports HbValue; functions will eventually replace swed_rt::builtins
-  swed_co: implements NativeFunction trait
-  swed (binary): BfRegistry passed to semantic/codegen for arity validation
+PENDING:
+  StrTran(s,old,new)     hb_ValToStr(v)    DToC/CToD     Time/Seconds
+  IsAlpha/Digit/Lower/Upper/Affirmation    Eval(block)
+  ACopy/AEval/ASort      PCount with context injection
+  Migrate swed_rt::builtins to here (premissa de mínima dependência)

@@ -1,114 +1,102 @@
 CRATE: swed_rt v0.2.0
 TYPE: library (lib)
-ROLE: Harbour runtime — HbValue type system, builtins, PUBLIC/MEMVAR store, array macro
-STATUS: functional; self-contained; builtins partially duplicated with swed_bf (migration ongoing)
+ROLE: Harbour runtime — HbValue type system, operators, builtins, PUBLIC/MEMVAR store
+STATUS: functional; zero workspace deps; builtins partial (migration to swed_bf ongoing)
 
-DEPS: none (intentionally zero workspace deps; only std)
+DEPS: none (zero workspace deps; only std)
 
 DESIGN_RULE: Generated Rust code links ONLY against swed_rt. No other workspace crate.
 
-PUBLIC_API (re-exported in lib.rs):
+PUBLIC_API (lib.rs re-exports):
 
 TYPES:
   HbValue — Harbour "any" type
-    Nil
-    Logical(bool)
-    Integer(i64)
-    Float(f64)
-    String(String)
-    Array(HbArray)
-    Date(i32)          — days since 1970-01-01
-  impl: Debug Clone PartialEq Display
-  impl: Add Sub Mul Div Rem Neg (all NIL-safe; Nil op X → Nil)
-  impl: PartialOrd (Harbour numeric coercion rules)
-  impl: Index<&HbValue>  → ref to inner HbArray element (zero-clone subscript)
-  methods:
-    hb_aadd(val)        — push to Array variant; panics if not Array
-    hb_len()            — returns Integer(len) for String/Array; Nil otherwise
-    hb_len_as_i64()     — unwrapped len for codegen use
-    hb_instr_contains() — substring membership test
-    into_hb()           — via IntoHbValue trait
+    Nil | Logical(bool) | Integer(i64) | Float(f64)
+    String(String) | Array(HbArray) | Date(i32)   [days since 1970-01-01]
+  impl: Debug Clone PartialEq PartialOrd Display
+  impl: Add Sub Mul Div Rem Neg (all NIL-safe: Nil op X → Nil)
+  impl: AddAssign SubAssign
+  impl: Not (logical not; non-Logical → Nil)
+  impl: Index<&HbValue> → &HbValue  (zero-clone 1-based subscript)
+  From: i64 i32 f64 bool String &str HbArray
 
-  HbArray — 1-indexed dynamic array
-    new() → HbArray
-    hb_aadd(val)        — push
-    len() → usize
-    get(i:usize) → &HbValue   — 0-based internal; callers use 1-based via HbValue::Index
-    get_mut(i) → &mut HbValue
-  impl: Debug Clone PartialEq Index<usize>
-  macro: hb_array![e1,e2,...] → HbArray
+  HbValue methods (value.rs):
+    hb_set_val(&mut self, idx:HbValue, val:HbValue)
+    hb_set_nested(&mut self, row:HbValue, col:HbValue, val:HbValue)
+    hb_get_val(idx:HbValue) -> HbValue
+    hb_len() -> HbValue::Integer
+    hb_len_as_i64() -> i64
+    hb_trunc(dec:i32) -> HbValue
+    hb_round(dec:i32) -> HbValue
+    hb_str_format(w:i32, d:i32) -> String
+    format_date() -> String       — "dd/mm/yyyy"
+    hb_instr_contains(&HbValue) -> HbValue::Logical
+    val_type() -> &'static str    — "N"/"C"/"L"/"D"/"A"/"U"
+    is_truthy() -> bool
+    to_hb_str() -> String
+    len() -> usize
+    pow_hb(exp) -> HbValue        — ^ operator
+
+  HbArray (array.rs):
+    new() / with_capacity(n) / filled(n)  — constructors
+    hb_aadd(&mut self, val) -> &mut Self
+    hb_asize(&mut self, n:HbValue)
+    hb_adel(&mut self, idx:HbValue)
+    hb_ains(&mut self, idx:HbValue)
+    hb_afill(&mut self, val:&HbValue, start:usize, count:usize)
+    hb_ascan(&self, val:&HbValue) -> HbValue::Integer
+    hb_asort(&mut self)
+    hb_get(i:usize) -> HbValue      — 1-based; OOB→Nil
+    hb_get_val(idx:HbValue) -> HbValue
+    hb_set(i:usize, val)            — 1-based; OOB→panic
+    hb_set_val(idx:HbValue, val)
+    len() / is_empty() / hb_len() -> HbValue::Integer
+    iter() / iter_mut()
+  macro: hb_array![e1,e2,...] -> HbArray
 
 TRAITS (unwrap.rs):
-  IntoHbValue
-    fn into_hb(self) -> HbValue
-    impl for: i64 f64 bool String &str i32 u32
-  TryAsRust
-    fn try_as_i64(&self) -> Option<i64>
-    fn try_as_f64(&self) -> Option<f64>
-    fn try_as_bool(&self) -> Option<bool>
-    fn try_as_str(&self) -> Option<&str>
-  ScopeStack
-    fn new() → ScopeStack
-    fn inject(name:&str, val:HbValue)
-    fn get(name:&str) -> HbValue    — returns Nil if not found
-  UnwrapError — error type for failed TryAsRust conversions
+  IntoHbValue::into_hb(self) -> HbValue
+  TryAsRust: try_as_i64/f64/bool/str
+  ScopeStack: new() / inject(name,val) / get(name) -> HbValue
+  UnwrapError
 
 PUBLIC_STORE (publics_var.rs):
-  pub_declare(name:&str)
-  pub_get(name:&str) -> HbValue
-  pub_set(name:&str, val:HbValue)
-  memvar_assign(name:&str, val:HbValue)   — MEMVAR / PRIVATE
-  memvar_get(name:&str) -> HbValue
-  public_store() -> Arc<RwLock<PublicVars>>  — raw access for codegen
+  pub_declare(name) / pub_get(name) / pub_set(name, val)
+  memvar_assign(name, val) / memvar_get(name)
+  public_store() -> Arc<RwLock<PublicVars>>
 
-BUILTINS (builtins.rs — partial; migration target: swed_bf):
-  hb_range(from,to,step:HbValue) -> impl Iterator<Item=HbValue>
-  hb_qout(v:HbValue)             — println!("{v}")
-  hb_qqout(v:HbValue)            — print!("{v}")
-  hb_str(n, width, dec)          — Harbour Str() with optional width/decimals
-  hb_substr(s, start, len)
-  hb_alltrim / hb_ltrim / hb_rtrim / hb_upper / hb_lower
-  hb_at(needle, haystack) -> HbValue::Integer (1-based position; 0=not found)
-  hb_rat(needle, haystack)       — reverse At
-  hb_padr / hb_padl(s, n)
-  hb_replicate(s, n)
-  hb_space(n)
-  hb_chr(n) / hb_asc(c)
-  hb_val(s) -> HbValue::Float
-  hb_valtype(v) -> HbValue::String  — "N"/"C"/"L"/"D"/"A"/"U"
-  hb_isnil(v) -> HbValue::Logical
-  hb_empty(v) -> HbValue::Logical
-  hb_len(v) -> HbValue::Integer
-  hb_abs / hb_int / hb_max / hb_min / hb_round
-  hb_aadd(arr, val) -> HbValue   — returns arr
-  hb_ascan(arr, val) -> HbValue::Integer
-  hb_asize(arr, n)               — resize array
-  hb_macro(name:&str) -> HbValue — runtime &varName expansion via PUBLIC store
-  hb_instr(needle, haystack)     — wrapper for hb_instr_contains
+BUILTINS (builtins.rs — migration target: swed_bf):
+  hb_array(n:HbValue) -> HbValue          — Array(n); NIL-filled
+  hb_range(from,to,step) -> HbRangeIter   — FOR loop
+  hb_qout(v) / hb_qqout(v)               — ? / ??
+  hb_space(n) / hb_replicate(s,n)        — Space / Replicate
+  hb_chr(n) / hb_asc(s)                  — Chr / Asc
+  hb_str(n,w,d) / hb_val(s)              — Str / Val
+  hb_substr(s,n,l)                        — SubStr (1-based)
+  hb_alltrim/ltrim/rtrim/upper/lower(s)
+  hb_at(n,h) / hb_rat(n,h)              — At / RAt (1-based; 0=not found)
+  hb_padl/padr(s,n,pad)
+  hb_len(v) -> Integer                    — Len (String bytes or Array elements)
+  hb_int(n) / hb_abs(n)                  — Int / Abs
+  hb_round(n,d) / hb_max(a,b) / hb_min(a,b)
+  hb_valtype(v) / hb_empty(v) / hb_isnil(v)
+  hb_aadd(arr:&mut HbArray, val) -> HbValue
+  hb_asize(arr,n) / hb_ascan(arr,val)
+  hb_setcolor(col) -> HbValue            — stub (returns "")
+  hb_inkey(timeout) -> HbValue           — stub (returns 0)
+  hb_lastkey() -> HbValue               — stub (returns 0)
+  hb_macro(val) -> HbValue              — &varName stub (returns val)
+  hb_instr(needle, haystack) -> HbValue — wrapper for hb_instr_contains
 
 INVARIANTS:
-  - NIL propagation: all arithmetic ops return Nil if either operand is Nil (no panic)
-  - 1-indexed arrays: external API uses 1-based; internal Vec is 0-based
-  - Thread-safety: PUBLIC store is Arc<RwLock<>>; STATIC uses thread_local!
-  - No unsafe code (forbid attribute)
-  - No external dependencies
+  NIL propagation: arithmetic/comparison with Nil → Nil (no panic)
+  1-indexed arrays: external 1-based; internal Vec 0-based (adjusted once at boundary)
+  Thread-safety: PUBLIC store is Arc<RwLock<>>
+  No unsafe code (workspace forbid)
+  No external dependencies (zero deps)
 
 PENDING (this crate):
-  hb_set_val(idx:HbValue, val:HbValue)                   (priority: H) — corrige E0070 simples
-    → LHS de `x.hb_get_val(i) = v` reescrito para `x.hb_set_val(i, v)` pelo swed_nm
-  hb_set_nested(i:HbValue, j:HbValue, val:HbValue)       (priority: H) — corrige E0070 chained
-    → `x.hb_get_val(i).hb_get_val(j) = v` → `x.hb_set_nested(i, j, v)`
-  hb_array(n:HbValue) -> HbValue                         (priority: H) — cria HbArray de n Nil
-    → Harbour Array(n); usado em resta1.rs linha 81/83/115
-  impl AddAssign for HbValue  (+= on let mut x)          (priority: H)
-  impl SubAssign / MulAssign / DivAssign                  (priority: H)
-  hb_eq(other) — SET EXACT OFF fuzzy string match         (priority: H)
-  hb_exact_eq(other) — SET EXACT ON strict match          (priority: H)
-  hb_get_val tornar não-genérico (aceitar HbValue direto) (priority: M) — corrige E0282
-  Migrate all builtins.rs functions to swed_bf            (priority: L)
-
-INTEGRATES_WITH:
-  swed (binary): generated code links against this crate
-  swed_bf: will import HbValue; builtins.rs functions migrate there incrementally
-  swed_db: WorkArea methods take/return HbValue
-  swed_ui: GetElement::value() returns HbValue
+  hb_eq fuzzy string match (SET EXACT OFF semantics)
+  MulAssign / DivAssign operators
+  hb_get_val non-generic (accept HbValue directly, fixes E0282)
+  Migrate builtins.rs to swed_bf (premissa de mínima dependência)
