@@ -7,7 +7,7 @@ description  = "SWed demo — Sandbox de código transpilado"
 
 [[bin]]
 name = "demo"
-path = "demo.rs"
+path = "resta1.rs"
 
 [dependencies]
 # Referência direta por caminho relativo para as crates de suporte
