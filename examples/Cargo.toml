@@ -9,11 +9,19 @@ description  = "SWed demo — Sandbox de código transpilado"
 name = "demo"
 path = "resta1.rs"
 
+[[bin]]
+name = "resta1_swed"
+path = "expec/resta1_swed.rs"
+
+[[bin]]
+name = "resta1_pure"
+path = "expec/resta1_pure.rs"
+
 [dependencies]
-# Referência direta por caminho relativo para as crates de suporte
 swed_rt = { path = "/home/barruga/project/beta/shipwrecked/swed_rt" }
 swed_db = { path = "/home/barruga/project/beta/shipwrecked/swed_db" }
 swed_bf = { path = "/home/barruga/project/beta/shipwrecked/swed_bf" }
+crossterm = "0.28"
 
 [workspace]
 # Este bloco vazio impede que o Cargo suba para o diretório pai 
