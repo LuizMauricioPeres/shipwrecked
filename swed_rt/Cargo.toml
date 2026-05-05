@@ -9,3 +9,6 @@ authors.workspace      = true
 description  = "Shipwrecked runtime — HbValue, HbArray and Harbour built-in functions for transpiled code"
 
 [dependencies]
+
+[lints]
+workspace = true

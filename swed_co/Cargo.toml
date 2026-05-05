@@ -8,12 +8,5 @@ repository.workspace   = true
 authors.workspace      = true
 description  = "Shipwrecked core — shared types and traits (HbType, SeverityLevel, SwedError)"
 
-[lints.rust]
-unsafe_code  = "forbid"
-missing_docs = "warn"
-
-[lints.clippy]
-all                     = "warn"
-pedantic                = "warn"
-module_name_repetitions = "allow"
-must_use_candidate      = "allow"
+[lints]
+workspace = true

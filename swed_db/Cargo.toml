@@ -9,9 +9,9 @@ authors.workspace      = true
 description  = "Shipwrecked database engine — RDD / DBF access layer"
 
 [dependencies]
-swed_rt  = { path = "../swed_rt" }
-thiserror = "1.0.69"
-byteorder = "1.5"
+swed_rt   = { workspace = true }
+thiserror = { workspace = true }
+byteorder = { workspace = true }
 
 [lints]
 workspace = true

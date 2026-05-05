@@ -9,15 +9,8 @@ authors.workspace      = true
 description  = "Shipwrecked Basic Functions — Harbour built-ins backed by HbValue"
 
 [dependencies]
-swed_co = { path = "../swed_co" }
-swed_rt = { path = "../swed_rt" }
+swed_co = { workspace = true }
+swed_rt = { workspace = true }
 
-[lints.rust]
-unsafe_code  = "forbid"
-missing_docs = "warn"
-
-[lints.clippy]
-all                     = "warn"
-pedantic                = "warn"
-module_name_repetitions = "allow"
-must_use_candidate      = "allow"
+[lints]
+workspace = true
