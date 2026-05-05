@@ -1,0 +1,60 @@
+# SWed AI Rules (Harbour to Rust Transpiler)
+
+## Contexto de Código
+- **Linguagem:** Rust (Edição 2021).
+- **Tipo Central:** `HbValue` (definido em `swed_rt`).
+- **Semântica:** Harbour é 1-based; Rust é 0-based. O runtime lida com isso internamente, mas o codegen deve estar ciente.
+
+## Regras de Implementação Rust
+1. **Evitar Clones Excessivos:** `HbValue` não implementa `Copy`. Em loops, prefira referências `&HbValue`. Use `.clone()` apenas no retorno ou quando a propriedade for necessária.
+2. **Aritmética:** Sempre use os operadores implementados para `HbValue` (em `swed_rt/src/value.rs`). Não tente converter para `f64` ou `i64` manualmente a menos que seja estritamente necessário para funções nativas.
+3. **Modularização:** 
+   - `swed_rt` e `swed_bf` são runtime puro. Não devem depender de `ratatui` ou ferramentas de dev (`swed_kn`, `swed_nm`).
+   - Novas funções Harbour devem ir para `swed_bf`.
+
+## Convenções de Nomenclatura
+- **Harbour:** UPPERCASE para símbolos globais/públicos.
+- **Rust:** snake_case para funções e variáveis locais.
+- **Conversão:** Use a função `to_snake_case` (disponível no projeto) para mapear nomes Harbour para Rust.
+
+## Tratamento de Erros
+- Use `SwedError` e `SeverityLevel` definidos em `swed_co`.
+- Erros em tempo de execução devem retornar `Result<HbValue, SwedError>`.
+
+## Dica para Transpilação
+- Ao sugerir código de transpilação, lembre-se que `m->var` busca no pool de memvars (`memvar_get`) e `ALIAS->field` busca no RDD (`field_get_alias`).
+
+## Mapa do Workspace (Crates)
+- `swed`: Binário principal (Lexer -> Parser -> Semantic -> Codegen).
+- `swed_co`: Core Types e Traits. **Zero lógica.** (Ex: `HbType`, `SwedError`).
+- `swed_rt`: Runtime central. Implementa `HbValue`, aritmética, datas e PUBLIC vars.
+- `swed_bf`: Basic Functions (StdLib). Implementação de funções como `LEFT`, `STR`, `DATE`.
+- `swed_db`: Camada RDD/DBF. Gerencia áreas de trabalho e acesso a campos.
+- `swed_ui`: Camada TUI (Ratatui). Widgets e sistema de `@..SAY/GET`.
+- `swed_nm`: Normalizador Semântico. Reescreve a AST (ex: `++` para `AddAssign`).
+- `swed_mkh`: Gerador de manifesto e testes de regressão.
+- `swed_kn`: Ferramentas de diagnóstico ("Knife"). Hex dumps e patches.
+- `swed_io`: I/O e conversão de encoding (CP1252 para UTF-8).
+
+## Padrões Proibidos (Anti-patterns)
+- **Proibido `unwrap()`/`expect()`:** Nunca use em código gerado ou runtime. Prefira `?` ou retorne `HbValue::Nil`.
+- **Proibido Cast Direto:** Nunca use `val as f64` ou `val as i64` em um `HbValue`. Use os métodos de extração seguros ou operadores implementados.
+- **Proibido Clones em Loops:** Evite `.clone()` dentro de iterações. Use referências `&HbValue`.
+- **Isolamento de UI:** `swed_rt` e `swed_bf` **jamais** devem importar `ratatui` ou `swed_ui`.
+
+## Tipos e Assinaturas Geradas
+- **Funções de Usuário:** `fn nome_func(p1: HbValue, ...) -> HbValue`.
+- **Built-ins (`swed_bf`):** `pub fn hb_nome(args: &[HbValue]) -> HbValue`.
+- **Variáveis Locais:** Mapeadas para `let mut snake_case`.
+- **Variáveis Static:** Mapeadas para `thread_local!` com `RefCell<HbValue>`.
+- **Retorno Padrão:** Funções Harbour que não especificam retorno devem retornar `HbValue::Nil`.
+
+## Crates Disponíveis e Uso
+- `logos`: Uso exclusivo no Lexer de `swed`.
+- `ratatui` / `crossterm`: Permitidos apenas em `swed_ui` e no binário `swed`.
+- `encoding_rs`: Permitido apenas em `swed_io` para normalização de fontes.
+- `serde`: Permitido em `swed_mkh` para serialização de manifestos.
+
+## Documentação Auxiliar
+- **Contexto por Módulo:** Consulte `/mnt/z/projects/SWed/Docs/*_IA.md` para semântica específica.
+- **Comportamentos Auxiliares:** Arquivos `<modulo>_IA.md` contêm as "edge cases" de funções originais do Clipper/Harbour.
