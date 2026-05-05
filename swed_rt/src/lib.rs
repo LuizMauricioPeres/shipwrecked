@@ -26,11 +26,11 @@ pub use publics_var::{
 // ── Built-in functions ────────────────────────────────────────────────────────
 pub use builtins::{
     hb_abs, hb_aadd, hb_asc, hb_ascan, hb_asize,
-    hb_alltrim, hb_at, hb_chr, hb_empty,
-    hb_int, hb_isnil, hb_len, hb_lower, hb_ltrim,
+    hb_alltrim, hb_array, hb_at, hb_chr, hb_empty,
+    hb_inkey, hb_int, hb_isnil, hb_lastkey, hb_len, hb_lower, hb_ltrim,
     hb_macro, hb_max, hb_min, hb_padr, hb_padl,
     hb_qqout, hb_qout, hb_range, hb_rat,
-    hb_replicate, hb_round, hb_rtrim, hb_space,
+    hb_replicate, hb_round, hb_rtrim, hb_setcolor, hb_space,
     hb_str, hb_substr, hb_upper, hb_val, hb_valtype,
 };
 

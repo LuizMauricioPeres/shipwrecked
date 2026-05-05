@@ -403,6 +403,33 @@ pub fn hb_ascan(arr: &HbArray, val: HbValue) -> HbValue {
     arr.hb_ascan(&val)
 }
 
+/// `ARRAY(nElements)` — creates a NIL-filled array of nElements.
+pub fn hb_array(n: HbValue) -> HbValue {
+    match n {
+        HbValue::Integer(n) if n >= 0 => HbValue::Array(HbArray::filled(n as usize)),
+        _ => HbValue::Nil,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UI / Keyboard stubs (terminal output not yet implemented)
+// ---------------------------------------------------------------------------
+
+/// `SETCOLOR([cColor])` — stub: returns current color string (always empty).
+pub fn hb_setcolor(_col: HbValue) -> HbValue {
+    HbValue::String(String::new())
+}
+
+/// `INKEY([nTimeout])` — stub: returns 0 (no key pressed).
+pub fn hb_inkey(_timeout: HbValue) -> HbValue {
+    HbValue::Integer(0)
+}
+
+/// `LASTKEY()` — stub: returns 0 (no key recorded).
+pub fn hb_lastkey() -> HbValue {
+    HbValue::Integer(0)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

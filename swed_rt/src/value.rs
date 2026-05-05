@@ -134,6 +134,18 @@ impl std::ops::Rem for HbValue {
     }
 }
 
+impl std::ops::AddAssign for HbValue {
+    fn add_assign(&mut self, rhs: HbValue) {
+        *self = self.clone() + rhs;
+    }
+}
+
+impl std::ops::SubAssign for HbValue {
+    fn sub_assign(&mut self, rhs: HbValue) {
+        *self = self.clone() - rhs;
+    }
+}
+
 impl std::ops::Neg for HbValue {
     type Output = HbValue;
     fn neg(self) -> HbValue {
@@ -252,6 +264,27 @@ impl HbValue {
         match self {
             HbValue::Array(a) => a.hb_get_val(index),
             _ => HbValue::Nil,
+        }
+    }
+
+    /// `aArr[n] := val` — set element at 1-based index in an Array value.
+    pub fn hb_set_val(&mut self, index: HbValue, val: HbValue) {
+        if let HbValue::Array(arr) = self {
+            arr.hb_set_val(index, val);
+        }
+    }
+
+    /// `aArr[row][col] := val` — nested 2-level index-assign for generated code.
+    pub fn hb_set_nested(&mut self, row: HbValue, col: HbValue, val: HbValue) {
+        if let HbValue::Array(outer) = self {
+            if let HbValue::Integer(r) = row {
+                if r >= 1 && (r as usize) <= outer.0.len() {
+                    let inner = &mut outer.0[(r - 1) as usize];
+                    if let HbValue::Array(inner_arr) = inner {
+                        inner_arr.hb_set_val(col, val);
+                    }
+                }
+            }
         }
     }
 
