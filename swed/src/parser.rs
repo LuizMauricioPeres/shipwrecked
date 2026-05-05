@@ -427,15 +427,16 @@ impl Parser {
             Some(Token::Say) => {
                 self.advance();
                 let expr = self.parse_expr()?;
-                // PICTURE clause is accepted but ignored on SAY
                 self.try_consume_picture();
-                Ok(Stmt::new(StmtKind::AtSay(AtSayStmt { row, col, expr }), sp..self.pos))
+                let color = self.try_consume_color();
+                Ok(Stmt::new(StmtKind::AtSay(AtSayStmt { row, col, expr, color }), sp..self.pos))
             }
             Some(Token::Get) => {
                 self.advance();
                 let var = self.expect_ident()?;
                 let picture = self.try_consume_picture();
-                Ok(Stmt::new(StmtKind::AtGet(AtGetStmt { row, col, var, picture }), sp..self.pos))
+                let color = self.try_consume_color();
+                Ok(Stmt::new(StmtKind::AtGet(AtGetStmt { row, col, var, picture, color }), sp..self.pos))
             }
             Some(other) => Err(ParseError::Unexpected {
                 got: format!("{other:?}"),
@@ -457,6 +458,15 @@ impl Parser {
             Some(Token::BracketString(s)) => Some(s),
             _ => None,
         }
+    }
+
+    /// Consome `COLOR <expr>` se presente; retorna a expressão de cor.
+    fn try_consume_color(&mut self) -> Option<Expr> {
+        if !matches!(self.peek(), Some(Token::Ident(s)) if s == "COLOR") {
+            return None;
+        }
+        self.advance(); // consume COLOR
+        self.parse_expr().ok()
     }
 
     fn parse_var_decl(&mut self, is_static: bool, sp: usize) -> Result<Stmt, ParseError> {

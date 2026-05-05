@@ -93,8 +93,23 @@ pub fn normalize(src: &str) -> String {
             out.push(ch);
             if ch == string_delim { in_string = false; }
         } else if in_bracket {
-            out.push(ch); // preserve original case inside [...]
-            if ch == ']' { in_bracket = false; }
+            // Inside [...]: preserve original case for string literals like [Alice],
+            // but still expand #define constants (they are UPPERCASE by convention).
+            if is_ident_char(ch) {
+                current_ident.push(ch); // accumulate with original case
+                if !chars_iter.peek().map_or(false, |&next_ch| is_ident_char(next_ch)) {
+                    let upper = current_ident.to_ascii_uppercase();
+                    if let Some(value) = defines.get(upper.as_str()) {
+                        out.push_str(value);
+                    } else {
+                        out.push_str(&current_ident); // preserve case for non-defines
+                    }
+                    current_ident.clear();
+                }
+            } else {
+                out.push(ch);
+                if ch == ']' { in_bracket = false; }
+            }
         } else if is_ident_char(ch) {
             // Acumular caracteres de identificador
             current_ident.push(ch.to_ascii_uppercase());
@@ -468,5 +483,34 @@ mod tests {
             .collect();
         assert!(!tokens.contains(&Token::Star), "Star should have been stripped: {:?}", tokens);
         assert!(tokens.contains(&Token::Assign), "code after comment must survive: {:?}", tokens);
+    }
+
+    #[test]
+    fn test_define_expanded_inside_bracket_index() {
+        // #define PECA 1 must be expanded even when used as array index: aArr[PECA]
+        let src = "#define PECA 1\naArr[PECA]";
+        let norm = normalize(src);
+        let tokens: Vec<_> = tokenize(&norm)
+            .into_iter()
+            .filter_map(|(t, _)| t.ok())
+            .filter(|t| !matches!(t, Token::Newline))
+            .collect();
+        // The bracket content "1" must lex as IntLit(1), not Ident("PECA")
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::BracketString(s) if s.trim() == "1")),
+            "define inside bracket-index was not expanded: {:?}", tokens
+        );
+    }
+
+    #[test]
+    fn test_define_inside_bracket_preserves_string_case() {
+        // Non-define identifiers inside [string] must preserve original case.
+        let src = "[Alice]";
+        let norm = normalize(src);
+        let tokens: Vec<_> = tokenize(&norm)
+            .into_iter()
+            .filter_map(|(t, _)| t.ok())
+            .collect();
+        assert_eq!(tokens[0], Token::BracketString("Alice".into()), "case not preserved: {:?}", tokens);
     }
 }

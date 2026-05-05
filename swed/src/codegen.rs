@@ -179,8 +179,28 @@ impl Codegen {
     fn emit_func(&mut self, f: &FuncDef) {
         self.reset_var_scope();
         self.collect_field_names(&f.body);
-        let params = self.render_params(&f.params);
         let fname = to_snake_case(&f.name);
+
+        // FUNCTION Main is the Harbour entry point; Rust main() cannot return HbValue.
+        // Wrap the body in a closure so `return expr` stays valid Rust, then discard.
+        if f.name.to_ascii_uppercase() == "MAIN" {
+            self.line("fn main() {");
+            self.indent();
+            if !self.field_names.is_empty() {
+                self.line("use swed_db::{field_get, field_set};");
+            }
+            self.line("let _: HbValue = (|| {");
+            self.indent();
+            self.emit_stmts(&f.body);
+            self.line("HbValue::Nil");
+            self.dedent();
+            self.line("})();");
+            self.dedent();
+            self.line("}");
+            return;
+        }
+
+        let params = self.render_params(&f.params);
         self.line(&format!("fn {fname}({params}) -> HbValue {{"));
         self.indent();
         if !self.field_names.is_empty() {
@@ -460,7 +480,8 @@ impl Codegen {
                         let key = var.to_ascii_uppercase();
                         self.out.push_str(&format!("{pad}memvar_assign(\"{key}\", {value}.clone());\n"));
                     } else {
-                        self.out.push_str(&format!("{pad}{var} = {value}.clone();\n"));
+                        let vname = to_snake_case(var);
+                        self.out.push_str(&format!("{pad}{vname} = {value}.clone();\n"));
                     }
                 }
             }
@@ -688,6 +709,13 @@ impl Codegen {
 
         // Well-known Harbour built-ins → idiomatic Rust mappings
         match call.callee.as_str() {
+            // Expression used as statement (post-increment/decrement side-effects).
+            // The arg is already the full expression block; emit it directly.
+            "__EXPR_STMT__" => {
+                if args.len() == 1 {
+                    return args[0].clone();
+                }
+            }
             "AADD" => {
                 // AAdd(arr, val) → arr.hb_aadd(val)
                 if args.len() == 2 {
@@ -718,6 +746,23 @@ impl Codegen {
                     return format!("{}.hb_str_op(\"|{method}|\")", args[0]);
                 }
             }
+            // ── swed_nm IndexAssignNorm output ────────────────────────────
+            // a[i] := v  →  a.hb_set_val(i, v)
+            "HB_SET_VAL" => {
+                if args.len() == 3 {
+                    return format!("{}.hb_set_val({}, {})", args[0], args[1], args[2]);
+                }
+            }
+            // a[i][j] := v  →  a.hb_set_nested(i, j, v)
+            "HB_SET_NESTED" => {
+                if args.len() == 4 {
+                    return format!(
+                        "{}.hb_set_nested({}, {}, {})",
+                        args[0], args[1], args[2], args[3]
+                    );
+                }
+            }
+
             "STR" => {
                 // STR(n [,len [,dec]]) — pad to 3 args since hb_str always requires all three
                 if !args.is_empty() {
@@ -975,5 +1020,35 @@ mod tests {
         let out = gen(src);
         assert!(out.contains("field_get(\"NVAL\")"), "FIELD deve ter prioridade; got:\n{out}");
         assert!(!out.contains("pub_get(\"NVAL\")"), "pub_get não deve aparecer; got:\n{out}");
+    }
+
+    // ── Bug-regression tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_store_uses_snake_case() {
+        // STORE 5 TO nLinha, nColuna must emit snake_case idents, not uppercase.
+        let src = "PROCEDURE Main()\nLOCAL nLinha\nLOCAL nColuna\nSTORE 5 TO nLinha, nColuna\nRETURN";
+        let out = gen(src);
+        assert!(out.contains("nlinha = HbValue::Integer(5)"), "STORE deve usar snake_case; got:\n{out}");
+        assert!(out.contains("ncoluna = HbValue::Integer(5)"), "STORE deve usar snake_case; got:\n{out}");
+        assert!(!out.contains("NLINHA ="), "STORE não deve usar uppercase; got:\n{out}");
+    }
+
+    #[test]
+    fn test_function_main_emits_fn_main_without_hbvalue_return() {
+        // `function main()` must emit `fn main()`, not `fn main() -> HbValue`.
+        let src = "function main()\nRETURN 0";
+        let out = gen(src);
+        assert!(out.contains("fn main() {"), "function main deve gerar fn main(); got:\n{out}");
+        assert!(!out.contains("fn main() -> HbValue"), "fn main não pode ter -> HbValue; got:\n{out}");
+    }
+
+    #[test]
+    fn test_post_increment_as_stmt_no_expr_stmt_call() {
+        // nVar++ as statement must NOT generate `expr_stmt(...)` (undefined function).
+        let src = "PROCEDURE Main()\nLOCAL nVar := 0\nnVar++\nRETURN";
+        let out = gen(src);
+        assert!(!out.contains("expr_stmt("), "expr_stmt não deve aparecer; got:\n{out}");
+        assert!(out.contains("nvar"), "variável deve aparecer; got:\n{out}");
     }
 }

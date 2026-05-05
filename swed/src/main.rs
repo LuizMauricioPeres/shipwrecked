@@ -71,10 +71,11 @@ fn transpile_dual(
     let normalized = lexer::normalize(source);
     let token_stream: Vec<lexer::Token> = lexer::tokenize(&normalized)
         .into_iter().filter_map(|(t, _)| t.ok()).collect();
-    let program = match parser::parse(token_stream) {
+    let mut program = match parser::parse(token_stream) {
         Ok(p) => p,
         Err(e) => { eprintln!("[parse error] {e}"); std::process::exit(1); }
     };
+    swed_nm::normalize(&mut program);
     let mut analyzer = semantic::Analyzer::new(sym);
     analyzer.analyze(&program);
     analyzer.print_diagnostics("<input>");
